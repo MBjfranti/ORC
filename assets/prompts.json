@@ -1,0 +1,61 @@
+{
+  "_readme": [
+    "Recipes for the ORC-1 panel textures. Commit the recipe, not just the pixels —",
+    "these are regenerable, and the prompts are the source of truth.",
+    "",
+    "Generated with the Undici pipeline (~/Desktop/Undici/pipeline), which calls the",
+    "OpenAI Images API directly. Run from that directory:",
+    "    python -m undici gen  \"<prompt>\" <out.png> [--field]",
+    "    python -m undici edit <base.png> \"<prompt>\" <out.png>",
+    "    python -m undici key  <in.png> <out.png>",
+    "    python -m undici seamless <in.png> <out.png> 0.18 --check",
+    "",
+    "Division of labour: CSS draws geometry (exact circles, crisp rects, precise",
+    "gaps); these rasters supply material (grain, knurl, rubber). Gradients fake",
+    "microtexture badly, which is what made the panel look flat.",
+    "",
+    "Piano keys are deliberately absent: generated sprites cannot hold pixel-exact",
+    "edges or consistent widths across twelve keys. Keybed geometry stays in CSS."
+  ],
+
+  "abs_bone": {
+    "out": "public/textures/abs_bone.png",
+    "step": "gen then seamless",
+    "note": "Uniform lighting is load-bearing — any gradient survives the seamless heal as a visible bright cross.",
+    "prompt": "seamless macro texture of matte bone-cream ABS injection-moulded plastic, very fine even matte grain with subtle orange-peel moulding texture, absolutely uniform flat-on lighting, no highlights, no shadows, no edges, no objects, no vignette, no border, fills the entire frame edge to edge"
+  },
+
+  "knob_yellow": {
+    "out": "public/textures/knob_yellow.png",
+    "step": "gen --field then key",
+    "note": "The master cap. Silver and orange are edits of this one so all three share identical knurl geometry — three separate gens would drift.",
+    "prompt": "top-down orthographic product photograph of a knurled synthesiser knob cap in matte yellow anodised finish, fine vertical diamond knurling around the rim, flat top face with a single moulded indicator line running from centre to edge, sharp macro detail, even soft studio light, perfectly circular, centred, no perspective"
+  },
+
+  "knob_silver": {
+    "out": "public/textures/knob_silver.png",
+    "base": "knob_yellow",
+    "step": "edit then key",
+    "prompt": "identical knob, identical knurling, identical framing, identical lighting and identical indicator line — repaint the cap brushed silver aluminium"
+  },
+
+  "knob_orange": {
+    "out": "public/textures/knob_orange.png",
+    "base": "knob_yellow",
+    "step": "edit then key",
+    "prompt": "identical knob, identical knurling, identical framing, identical lighting and identical indicator line — repaint the cap bright orange-red"
+  },
+
+  "grille_slots": {
+    "out": "public/textures/grille_slots.png",
+    "step": "gen only",
+    "note": "Deliberately NOT run through seamless: it mirror-blends both axes, which smears a strict stripe pitch. Crop an integer number of slot periods and repeat in CSS instead.",
+    "prompt": "extreme close-up top-down photograph of fine horizontal slots moulded into a matte cream-bone ABS plastic panel, slots perfectly straight parallel and evenly spaced, soft overhead studio light, shallow moulded relief with subtle shadow inside each slot, flat-on orthographic view, no perspective, no vignette, fills the entire frame edge to edge"
+  },
+
+  "pad_rubber": {
+    "out": "public/textures/pad_rubber.png",
+    "step": "gen --field then key",
+    "prompt": "top-down orthographic photograph of a dark charcoal soft-touch silicone rubber button pad with a gently domed top, matte velvety surface with fine rubber grain, soft broad overhead light with a single diffuse specular on the dome crown, subtle rounded edge falloff, rounded square shape, centred, no perspective"
+  }
+}
