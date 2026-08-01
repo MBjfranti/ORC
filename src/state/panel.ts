@@ -240,7 +240,16 @@ export interface PanelState {
   soundIndex: number
 
   toggleType: (type: ChordType, held: boolean) => void
-  clearTypes: () => void
+  /**
+   * Let go of every chord-type and extension pad at once.
+   *
+   * The panel's held buttons are a mirror of what your fingers are doing, and
+   * that mirror only stays true while the window is receiving key events. Lose
+   * focus mid-chord — alt-tab, a click into the address bar, the OS taking over
+   * — and the keyup never arrives, so the pad stays lit and every note you play
+   * afterwards comes out as that chord. This is how you get back to nothing.
+   */
+  clearHeld: () => void
   cycleSecretChords: (delta?: number) => void
   toggleExtended: () => void
   cycleView: (delta: number) => void
@@ -440,7 +449,7 @@ export const usePanel = create<PanelState>((set, get) => ({
         : s.heldTypes.filter((t) => t !== type),
     })),
 
-  clearTypes: () => set({ heldTypes: [] }),
+  clearHeld: () => set({ heldTypes: [], heldExtensions: [] }),
   // Three-way, as on the hardware, so a press steps rather than toggles.
   cycleSecretChords: (delta = 1) =>
     set((s) => {

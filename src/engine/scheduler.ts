@@ -40,6 +40,12 @@ interface Voice {
   step: number
   /** Last interval we set, so we only disturb the loop when timing changes. */
   stepSeconds: number
+  /**
+   * The step this cycle is currently sounding, and whose release is already
+   * booked. Needed so letting go of the key can stop it now and withdraw that
+   * booking, rather than leaving both to land after the next chord starts.
+   */
+  ringing?: MidiNote | undefined
 }
 
 export class PerformanceScheduler {
@@ -107,6 +113,7 @@ export class PerformanceScheduler {
 
       this.on(note, 0.8, time)
       this.off(note, time + cycle.stepSeconds * cycle.gate)
+      voice.ringing = note
     }, performance.stepSeconds)
 
     // Start at the transport's current position so the arp begins under the
@@ -173,6 +180,17 @@ export class PerformanceScheduler {
     if (!voice) return
 
     voice.loop?.stop().dispose()
+
+    // A cycle keeps nothing in `sustained` — its note is whichever step last
+    // fired, with a release already booked a gate-length ahead. Cancel that
+    // booking and release now, so the arpeggio stops with the key instead of
+    // hanging on and then reaching into the next chord.
+    if (voice.ringing !== undefined) {
+      this.engine.cancelNote(voice.ringing)
+      this.off(voice.ringing)
+      voice.ringing = undefined
+    }
+
     for (const note of voice.sustained) this.off(note)
     this.voices.delete(pc)
   }

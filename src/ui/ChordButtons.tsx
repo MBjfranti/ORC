@@ -10,7 +10,7 @@
  * moulded hardware rather than eight web buttons.
  */
 
-import { memo } from 'react'
+import { memo, useRef } from 'react'
 
 import { secretChordFor } from '../core/chord.js'
 import { secretChordsApply } from '../core/playStyle.js'
@@ -43,6 +43,59 @@ const EXT_LABEL: Record<Extension, string> = {
 const codeForType = (t: ChordType) => Object.keys(TYPE_KEYS).find((c) => TYPE_KEYS[c] === t)!
 const codeForExt = (e: Extension) => Object.keys(EXTENSION_KEYS).find((c) => EXTENSION_KEYS[c] === e)!
 
+/**
+ * One rubber dome, held for exactly as long as the pointer holds it.
+ *
+ * The pads used to release on `pointerleave` whenever the store said the pad
+ * was held — but the store is also how a pad held on the *computer keyboard*
+ * reports itself, so simply moving the mouse across the panel let go of a
+ * chord type the player was still holding down with their left hand.
+ *
+ * Worse in the other direction: `pointerup` is delivered to whatever the
+ * pointer is over, so lifting the mouse anywhere else never released the pad at
+ * all, and the instrument stayed in that chord for good. Capturing the pointer
+ * makes the up (and the cancel, when the browser takes the gesture away) come
+ * back here no matter where it happens, and the local flag means we only ever
+ * let go of a pad this pointer actually pressed.
+ */
+function Pad({
+  label,
+  held,
+  secret,
+  onHold,
+}: {
+  label: string
+  held: boolean
+  secret?: boolean
+  onHold: (down: boolean) => void
+}) {
+  const mine = useRef(false)
+
+  const letGo = () => {
+    if (!mine.current) return
+    mine.current = false
+    onHold(false)
+  }
+
+  return (
+    <button
+      className="pad"
+      data-held={held}
+      data-secret={secret}
+      aria-label={label}
+      aria-pressed={held}
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        mine.current = true
+        onHold(true)
+      }}
+      onPointerUp={letGo}
+      onPointerCancel={letGo}
+    />
+  )
+}
+
 export const ChordButtons = memo(function ChordButtons({ legends }: { legends: LegendMap }) {
   const heldTypes = usePanel((s) => s.heldTypes)
   const heldExtensions = usePanel((s) => s.heldExtensions)
@@ -68,19 +121,12 @@ export const ChordButtons = memo(function ChordButtons({ legends }: { legends: L
 
       <div className="pad-grid">
         {CHORD_TYPES.map((type) => (
-          <button
+          <Pad
             key={type}
-            className="pad"
-            data-held={heldTypes.includes(type)}
-            data-secret={!!secret}
-            aria-label={TYPE_LABEL[type]}
-            aria-pressed={heldTypes.includes(type)}
-            onPointerDown={(e) => {
-              e.preventDefault()
-              toggleType(type, true)
-            }}
-            onPointerUp={() => toggleType(type, false)}
-            onPointerLeave={() => heldTypes.includes(type) && toggleType(type, false)}
+            label={TYPE_LABEL[type]}
+            held={heldTypes.includes(type)}
+            secret={!!secret}
+            onHold={(down) => toggleType(type, down)}
           />
         ))}
       </div>
@@ -93,18 +139,11 @@ export const ChordButtons = memo(function ChordButtons({ legends }: { legends: L
 
       <div className="pad-grid">
         {EXTENSIONS.map((ext) => (
-          <button
+          <Pad
             key={ext}
-            className="pad"
-            data-held={heldExtensions.includes(ext)}
-            aria-label={EXT_LABEL[ext]}
-            aria-pressed={heldExtensions.includes(ext)}
-            onPointerDown={(e) => {
-              e.preventDefault()
-              toggleExtension(ext, true)
-            }}
-            onPointerUp={() => toggleExtension(ext, false)}
-            onPointerLeave={() => heldExtensions.includes(ext) && toggleExtension(ext, false)}
+            label={EXT_LABEL[ext]}
+            held={heldExtensions.includes(ext)}
+            onHold={(down) => toggleExtension(ext, down)}
           />
         ))}
       </div>

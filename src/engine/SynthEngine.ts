@@ -123,6 +123,12 @@ export interface SynthEngine {
 
   noteOn(note: MidiNote, velocity: number, at?: number): void
   noteOff(note: MidiNote, at?: number): void
+  /**
+   * Withdraw events queued for `note` that have not sounded yet, leaving
+   * anything already ringing alone. For whoever booked a release ahead of time
+   * and then changed their mind.
+   */
+  cancelNote(note: MidiNote): void
 
   /** The independent monophonic bass voice. */
   bassOn(note: MidiNote, velocity?: number, at?: number): void

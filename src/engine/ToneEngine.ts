@@ -24,6 +24,18 @@ function round(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+/**
+ * A note event that has been asked for but has not happened yet.
+ *
+ * Held in an object rather than as a bare id so the callback can remove itself
+ * from the queue without closing over a variable it is still initialising.
+ */
+interface Pending {
+  id: number
+  /** Request order, so a stale release cannot claim a later attack. */
+  seq: number
+}
+
 class ToneEngineImpl implements SynthEngine {
   private synths = new Map<EngineId, Tone.PolySynth>()
   private filter!: Tone.Filter
@@ -47,9 +59,25 @@ class ToneEngineImpl implements SynthEngine {
   private bassNote: MidiNote | undefined
 
   private active: EngineId = DEFAULT_PRESET.engine
-  private sounding = new Set<MidiNote>()
   private started = false
   private built = false
+
+  /**
+   * How many voices are actually sounding for each note.
+   *
+   * A count, not a set. `PolySynth.triggerRelease` releases exactly one voice
+   * per call, so two attacks and one release leaves a voice ringing forever.
+   * Anything that can strike the same note twice — an arpeggio doubled at the
+   * octave, the looper playing over a live hand — needs the releases to be
+   * counted rather than assumed unique.
+   */
+  private live = new Map<MidiNote, number>()
+
+  /** Scheduled attacks and releases that have not fired yet, per note. */
+  private pendingOn = new Map<MidiNote, Pending[]>()
+  private pendingOff = new Map<MidiNote, Pending[]>()
+  private pendingBass: Pending[] = []
+  private seq = 0
 
   get running(): boolean {
     return this.started
@@ -237,32 +265,143 @@ class ToneEngineImpl implements SynthEngine {
     return this.synths.get(this.active)
   }
 
+  /**
+   * Run `fire` at audio time `at`, cancellably.
+   *
+   * Tone schedules future notes with `context.setTimeout` internally, and that
+   * timer is not reachable from the outside — which is the whole bug this
+   * replaces. A strummed chord asks for four attacks spread over as much as a
+   * quarter of a second; release the key before the last one lands and
+   * `triggerRelease` runs against a voice that does not exist yet, does
+   * nothing, and the attack arrives afterwards with nothing left to stop it.
+   * Those are the notes that hang.
+   *
+   * Owning the timer means a release can reach *forward* and cancel an attack
+   * that has not happened. The lead time matches Tone's own: fire one lookahead
+   * early and hand the exact `at` to the synth, so the envelope is still
+   * scheduled sample-accurately rather than whenever the timer happened to run.
+   */
+  private schedule(
+    queue: Map<MidiNote, Pending[]> | Pending[],
+    note: MidiNote,
+    at: number,
+    seq: number,
+    fire: (time: number) => void,
+  ): void {
+    const delay = at - Tone.now()
+    if (delay <= 0) {
+      fire(at)
+      return
+    }
+
+    const list = Array.isArray(queue) ? queue : (queue.get(note) ?? [])
+    if (!Array.isArray(queue) && !queue.has(note)) queue.set(note, list)
+
+    const token: Pending = { id: 0, seq }
+    token.id = Tone.getContext().setTimeout(() => {
+      const i = list.indexOf(token)
+      if (i >= 0) list.splice(i, 1)
+      fire(at)
+    }, delay)
+    list.push(token)
+  }
+
+  private static cancel(list: Pending[] | undefined): void {
+    if (!list) return
+    for (const token of list) Tone.getContext().clearTimeout(token.id)
+    list.length = 0
+  }
+
+  private attack(note: MidiNote, velocity: number, time: number): void {
+    this.current()?.triggerAttack(midiToFreq(note), time, velocity)
+    this.live.set(note, (this.live.get(note) ?? 0) + 1)
+  }
+
+  private release(note: MidiNote, time: number, seq: number): void {
+    const count = this.live.get(note) ?? 0
+    if (count > 0) {
+      this.current()?.triggerRelease(midiToFreq(note), time)
+      if (count === 1) this.live.delete(note)
+      else this.live.set(note, count - 1)
+      return
+    }
+
+    // Nothing is sounding for this note, so the release has overtaken its own
+    // attack — the strum tail described above. Withdraw the attack instead of
+    // dropping the release on the floor.
+    //
+    // Only an attack that was already queued when this release was *asked for*
+    // can be the one it was meant to stop. Without that test a long arpeggio
+    // gate, still pending from a chord you have already let go of, would fire
+    // later and swallow the first note of the chord you played next.
+    const queued = this.pendingOn.get(note)
+    const i = queued?.findIndex((token) => token.seq < seq) ?? -1
+    if (queued && i >= 0) {
+      Tone.getContext().clearTimeout(queued[i]!.id)
+      queued.splice(i, 1)
+      if (queued.length === 0) this.pendingOn.delete(note)
+    }
+  }
+
   noteOn(note: MidiNote, velocity = 0.8, at?: number): void {
     if (!this.started) return
     // `immediate()` is currentTime with no lookahead added — the earliest the
     // hardware can actually start the note.
-    this.current()?.triggerAttack(midiToFreq(note), at ?? Tone.immediate(), velocity)
-    this.sounding.add(note)
+    this.schedule(this.pendingOn, note, at ?? Tone.immediate(), ++this.seq, (t) =>
+      this.attack(note, velocity, t),
+    )
   }
 
   noteOff(note: MidiNote, at?: number): void {
     if (!this.started) return
-    this.current()?.triggerRelease(midiToFreq(note), at ?? Tone.immediate())
-    this.sounding.delete(note)
+    const seq = ++this.seq
+    this.schedule(this.pendingOff, note, at ?? Tone.immediate(), seq, (t) =>
+      this.release(note, t, seq),
+    )
   }
 
-  /** Monophonic: a new note steals the old one rather than stacking. */
+  /**
+   * Drop everything queued for `note` without touching what is already
+   * sounding.
+   *
+   * The arpeggiator books each step's release a gate-length ahead. Let go of
+   * the key and that release is still in the diary — at a quarter-note gate it
+   * can be half a second away, long enough to land on the chord you played
+   * next and cut one of its notes short. Whoever queued the event is the only
+   * one who knows it is no longer wanted, so the scheduler withdraws it here.
+   */
+  cancelNote(note: MidiNote): void {
+    if (!this.started) return
+    ToneEngineImpl.cancel(this.pendingOn.get(note))
+    ToneEngineImpl.cancel(this.pendingOff.get(note))
+    this.pendingOn.delete(note)
+    this.pendingOff.delete(note)
+  }
+
+  /**
+   * Monophonic: a new note steals the old one rather than stacking.
+   *
+   * `bassNote` is updated when the note actually sounds, not when it is asked
+   * for. The looper schedules a whole pass in one go, so setting it at request
+   * time left the flag describing the *last* event of the pass while the first
+   * was still playing — and a live `bassOff` would then bail out early and
+   * leave the bass droning.
+   */
   bassOn(note: MidiNote, velocity = 0.85, at?: number): void {
     if (!this.started) return
-    const time = at ?? Tone.immediate()
-    this.bass.triggerAttack(midiToFreq(note), time, velocity)
-    this.bassNote = note
+    this.schedule(this.pendingBass, note, at ?? Tone.immediate(), ++this.seq, (t) => {
+      this.bass.triggerAttack(midiToFreq(note), t, velocity)
+      this.bassNote = note
+    })
   }
 
   bassOff(at?: number): void {
-    if (!this.started || this.bassNote === undefined) return
-    this.bass.triggerRelease(at ?? Tone.immediate())
-    this.bassNote = undefined
+    if (!this.started) return
+    this.schedule(this.pendingBass, -1, at ?? Tone.immediate(), ++this.seq, (t) => {
+      if (this.bassNote === undefined) return
+      this.bass.triggerRelease(t)
+      this.bassNote = undefined
+    })
   }
 
   /**
@@ -289,11 +428,31 @@ class ToneEngineImpl implements SynthEngine {
     this.bassGain.gain.rampTo(Math.pow(10, db / 20), 0.05)
   }
 
+  /**
+   * Panic.
+   *
+   * Releasing every sounding voice is only half the job — anything already
+   * queued has to be withdrawn too, or it attacks *after* the panic and hangs.
+   * That is what left a loop still trickling notes out after Pause, and a
+   * strum ringing on after alt-tab: both call this, and neither was reaching
+   * the scheduled half of the note.
+   */
   allNotesOff(): void {
     if (!this.started) return
+
+    for (const list of this.pendingOn.values()) ToneEngineImpl.cancel(list)
+    for (const list of this.pendingOff.values()) ToneEngineImpl.cancel(list)
+    ToneEngineImpl.cancel(this.pendingBass)
+    this.pendingOn.clear()
+    this.pendingOff.clear()
+
     for (const synth of this.synths.values()) synth.releaseAll()
-    this.bassOff()
-    this.sounding.clear()
+    this.live.clear()
+
+    if (this.bassNote !== undefined) {
+      this.bass.triggerRelease(Tone.immediate())
+      this.bassNote = undefined
+    }
   }
 
   setPreset(preset: Preset): void {
@@ -353,7 +512,7 @@ class ToneEngineImpl implements SynthEngine {
   }
 
   dispose(): void {
-    this.allNotesOff()
+    if (this.started) this.allNotesOff()
     for (const synth of this.synths.values()) synth.dispose()
     this.bass?.dispose()
     this.synths.clear()

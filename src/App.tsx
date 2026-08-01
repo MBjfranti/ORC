@@ -475,7 +475,12 @@ export default function App() {
       for (const n of held.notes) if (!next.includes(n)) midi.noteOff('chord', n)
       for (const n of next) if (!held.notes.includes(n)) midi.noteOn('chord', n, 0.8)
 
-      soundingRef.current.set(pc, {
+      // Keyed by `root`, the RootId — *not* by its pitch class. Both maps and
+      // the scheduler are keyed that way, because the octave key doubles the
+      // tonic and the two would otherwise collide. Writing the pitch class back
+      // here left a second, orphaned entry that nothing could ever release, and
+      // took the bass lookup below with it.
+      soundingRef.current.set(root, {
         notes: next,
         name: resolved?.name ?? noteName(pc),
         root: resolved?.root ?? noteName(pc),
@@ -485,16 +490,16 @@ export default function App() {
       })
 
       // The bass follows the chord's root and its own dial.
-      const previousBass = bassRef.current.get(pc)
+      const previousBass = bassRef.current.get(root)
       if (previousBass !== undefined) {
         const intervals = resolved ? buildChord(resolved.spec) : [0]
-        const root = resolved ? resolved.spec.root : pc
-        const nextBass = bassNote(intervals, root, s.bassVoicing) + semitones
+        const bassRootPc = resolved ? resolved.spec.root : pc
+        const nextBass = bassNote(intervals, bassRootPc, s.bassVoicing) + semitones
         if (nextBass !== previousBass) {
           midi.noteOff('bass', previousBass)
           engine.bassOn(nextBass)
           midi.noteOn('bass', nextBass, 0.85)
-          bassRef.current.set(pc, nextBass)
+          bassRef.current.set(root, nextBass)
         }
       }
     }
@@ -511,6 +516,10 @@ export default function App() {
     soundingRef.current.clear()
     heldRootsRef.current.length = 0
     stickyTypesRef.current = []
+    // The pads are held by keys that will never send their keyup once focus has
+    // gone. Leaving them latched is what left the instrument stuck in a chord
+    // — silent, but harmonising everything you played next.
+    usePanel.getState().clearHeld()
     usePanel.getState().setLatched(false)
     setPressed(new Set())
   }, [engine, scheduler, midi])

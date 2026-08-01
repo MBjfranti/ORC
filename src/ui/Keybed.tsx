@@ -14,7 +14,7 @@
  * keydown handler, hence the memo on the chord table and on each key.
  */
 
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useRef } from 'react'
 
 import { resolveChord } from '../core/resolve.js'
 import type { ResolvedChord } from '../core/resolve.js'
@@ -158,6 +158,27 @@ const Key = memo(function Key({
   onPress,
   onRelease,
 }: KeyProps) {
+  /**
+   * Whether *this pointer* is what is holding the key down.
+   *
+   * Two things went wrong without it. `pointerup` only reaches the element the
+   * pointer is still over, so releasing the mouse anywhere else left the note
+   * sounding; and `pointerleave` fired on `pressed`, which is also true for a
+   * key being held on the computer keyboard — so sweeping the mouse across the
+   * keybed cut off notes the player's other hand was still holding.
+   *
+   * Capturing the pointer fixes the first: up and cancel are then guaranteed to
+   * come back here. The local flag fixes the second, by distinguishing a key
+   * this pointer pressed from one that merely looks pressed.
+   */
+  const held = useRef(false)
+
+  const letGo = () => {
+    if (!held.current) return
+    held.current = false
+    onRelease(pc)
+  }
+
   return (
     <button
       className={`key ${black ? 'black' : 'white'}`}
@@ -165,10 +186,15 @@ const Key = memo(function Key({
       aria-label={`${name}${chordName ? `, plays ${chordName}` : ''}`}
       onPointerDown={(e) => {
         e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        held.current = true
         onPress(pc)
       }}
-      onPointerUp={() => onRelease(pc)}
-      onPointerLeave={() => pressed && onRelease(pc)}
+      onPointerUp={letGo}
+      // Fires when the browser takes the gesture away — a touch turning into a
+      // scroll, the OS interrupting. No `pointerup` follows it, so without this
+      // the note has nothing left to stop it.
+      onPointerCancel={letGo}
     >
       <span className="tier3" data-borrowed={borrowed}>
         {tierText}
