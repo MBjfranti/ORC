@@ -1,126 +1,90 @@
 /**
- * Core domain types.
+ * The vocabulary.
  *
- * This module — and everything else in `src/core` — has ZERO dependencies.
- * No React, no Tone.js, no DOM. Pure data in, pure data out.
- * See research/12-tech-stack.md.
+ * `src/core` is pure: music theory, no audio, no React, no browser. Everything
+ * here is a number or a string, so it can be tested without a sound card.
  */
 
-/** A pitch class, 0 = C … 11 = B. */
+/** 0 = C, 1 = C♯ … 11 = B. */
 export type PitchClass = number
 
-/** A MIDI note number, 0–127. Middle C (C4) = 60. */
+/** A MIDI note number. 60 = middle C. */
 export type MidiNote = number
 
-/**
- * The four Chord Type buttons — the top row of the panel.
- * Selects the base triad. See research/03-chord-engine.md.
- */
+/** The four base triads — the top row of pads. */
 export type ChordType = 'dim' | 'min' | 'maj' | 'sus'
 
+export const CHORD_TYPES: readonly ChordType[] = ['dim', 'min', 'maj', 'sus']
+
 /**
- * The four Chord Extension buttons — the bottom row of the panel.
- * Additive and stackable; they add notes to whatever triad is selected.
- * Named for what is printed on the hardware, not for interval size.
+ * The four added notes — the bottom row.
+ *
+ * Additive and stackable, and deliberately literal: `9` adds a ninth, it does
+ * not imply the seventh underneath it the way jazz notation would. Stacking
+ * `m7` and `9` is how you get a real ninth chord, which is what makes the pads
+ * teach intervals rather than chord symbols.
  */
 export type Extension = '6' | 'm7' | 'M7' | '9'
 
-/** All chord types, in panel order (left to right). */
-export const CHORD_TYPES: readonly ChordType[] = ['dim', 'min', 'maj', 'sus'] as const
+export const EXTENSIONS: readonly Extension[] = ['6', 'm7', 'M7', '9']
 
-/** All extensions, in panel order (left to right). */
-export const EXTENSIONS: readonly Extension[] = ['6', 'm7', 'M7', '9'] as const
-
-/**
- * A chord as the player specifies it: a root, a triad quality, and any
- * number of stacked extensions. This is the literal state of the panel.
- */
-export interface ChordSpec {
-  readonly root: PitchClass
-  readonly type: ChordType
-  /** Order-insensitive. Duplicates are ignored. */
-  readonly extensions: readonly Extension[]
-  /**
-   * Set when two or more Chord Type buttons are held, replacing the base triad.
-   * Typed loosely here so `types.ts` stays free of chord-building logic.
-   */
-  readonly secret?: { readonly intervals: readonly number[]; readonly suffix: string }
-}
-
-/** Whether `sus` builds a sus4 (0,5,7) or a sus2 (0,2,7). */
-export type SusFlavour = 'sus4' | 'sus2'
-
-/** Letter names, used for enharmonically-correct spelling. */
-export type Letter = 'C' | 'D' | 'E' | 'F' | 'G' | 'A' | 'B'
-
-/**
- * A note spelled with a letter and an accidental, so that C# and Db are
- * distinguishable. Accidental is in semitones: -2 = double flat, +2 = double sharp.
- */
-export interface SpelledNote {
-  readonly letter: Letter
-  readonly accidental: number
-}
-
-/**
- * The seven diatonic modes.
- *
- * `major` and `minor` are Ionian and Aeolian under the names people actually
- * use — which also means every key that was major or minor still is.
- */
+/** The seven diatonic modes, in brightness order (Lydian brightest). */
 export type Mode =
-  | 'major' // Ionian
+  | 'ionian'
   | 'dorian'
   | 'phrygian'
   | 'lydian'
   | 'mixolydian'
-  | 'minor' // Aeolian
+  | 'aeolian'
   | 'locrian'
 
-/** Modes in scale order, each a rotation of the one before. */
 export const MODES: readonly Mode[] = [
-  'major',
+  'ionian',
   'dorian',
   'phrygian',
   'lydian',
   'mixolydian',
-  'minor',
+  'aeolian',
   'locrian',
-] as const
+]
 
+/**
+ * Ionian and Aeolian go by the names people actually use.
+ *
+ * Nobody says "I wrote it in C Ionian". The other five keep their modal names
+ * because there is no everyday alternative.
+ */
 export const MODE_LABEL: Record<Mode, string> = {
-  major: 'Major',
+  ionian: 'Major',
   dorian: 'Dorian',
   phrygian: 'Phrygian',
   lydian: 'Lydian',
   mixolydian: 'Mixolydian',
-  minor: 'Minor',
+  aeolian: 'Minor',
   locrian: 'Locrian',
 }
 
-/**
- * How a key is written on the display: `C`, `Bm`, `D Dorian`.
- *
- * The manual quotes the encoder's readout as "Bm" and "C" — major is bare and
- * minor takes a lower-case m, the way keys are actually written. Showing the
- * tonic alone (which is what this used to do) loses half the information: `C`
- * and `Cm` are different keys and the display said `C` for both.
- */
+/** Suffix for a key name: `C`, `Am`, `D Dorian`. */
 export const MODE_SUFFIX: Record<Mode, string> = {
-  major: '',
-  minor: 'm',
+  ionian: '',
   dorian: ' Dorian',
   phrygian: ' Phrygian',
   lydian: ' Lydian',
   mixolydian: ' Mixolydian',
+  aeolian: 'm',
   locrian: ' Locrian',
 }
 
-/** Retained name for the two modes that carry a conventional key signature. */
-export type Tonality = Mode
-
-/** A musical key: a tonic plus a mode. */
 export interface Key {
   readonly tonic: PitchClass
-  readonly tonality: Mode
+  readonly mode: Mode
 }
+
+/** What the pads and Key Mode resolve to before voicing. */
+export interface ChordSpec {
+  readonly root: PitchClass
+  readonly type: ChordType
+  readonly extensions: readonly Extension[]
+}
+
+export const mod12 = (n: number): PitchClass => ((n % 12) + 12) % 12

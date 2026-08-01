@@ -1,37 +1,38 @@
 /**
- * The QWERTY keyboard mapping.
+ * The QWERTY mapping.
  *
- * Bound to `event.code` (physical position), never `event.key`, so the layout
- * survives AZERTY, QWERTZ and Dvorak — a French player still gets a piano under
- * their fingers. See research/11-webapp-implications.md §1.
+ * Bound to `event.code` — physical position — never `event.key`, so the layout
+ * survives AZERTY, QWERTZ and Dvorak. A French player still gets a piano under
+ * their fingers; only the printed legends change.
  *
- * On an ANSI board the home row sits +0.25u right of the top row, which places
- * every black key precisely between its two white keys:
+ * On an ANSI board the home row sits a quarter-key right of the top row, which
+ * puts every black key precisely between its two white keys:
  *
- *     Q  W  E  R  T   Y  U  I  O  P  [        types      black keys
- *      A  S  D  F  G  H  J  K  L  ;  '        extensions white keys
+ *     Q  W  E  R      Y  U     O  P  [        types  ·  black keys
+ *      A  S  D  F    G  H  J  K  L  ;  '      exts   ·  white keys
  */
 
-import { scaleRoots } from '../core/key.js'
-import type { ChordType, Extension, Key, PitchClass } from '../core/types.js'
+import { scaleNotes } from '../core/key.js'
+import type { Key, PitchClass } from '../core/types.js'
+import type { ChordType, Extension } from '../core/types.js'
+import type { RootMode } from '../state/panel.js'
 
-/** Physical key code -> pitch class, 0 = C. */
+/** Physical key → pitch class, chromatic layout. */
 export const ROOT_KEYS: Readonly<Record<string, PitchClass>> = {
-  KeyG: 0, // C
-  KeyY: 1, // C#
-  KeyH: 2, // D
-  KeyU: 3, // D#
-  KeyJ: 4, // E
-  KeyK: 5, // F
-  KeyO: 6, // F#
-  KeyL: 7, // G
-  KeyP: 8, // G#
-  Semicolon: 9, // A
-  BracketLeft: 10, // A#
-  Quote: 11, // B
+  KeyG: 0,
+  KeyY: 1,
+  KeyH: 2,
+  KeyU: 3,
+  KeyJ: 4,
+  KeyK: 5,
+  KeyO: 6,
+  KeyL: 7,
+  KeyP: 8,
+  Semicolon: 9,
+  BracketLeft: 10,
+  Quote: 11,
 }
 
-/** Physical key code -> chord type. Top row, left hand. */
 export const TYPE_KEYS: Readonly<Record<string, ChordType>> = {
   KeyQ: 'dim',
   KeyW: 'min',
@@ -39,39 +40,22 @@ export const TYPE_KEYS: Readonly<Record<string, ChordType>> = {
   KeyR: 'sus',
 }
 
-/** Physical key code -> extension. Home row, left hand. */
-export const EXTENSION_KEYS: Readonly<Record<string, Extension>> = {
-  KeyA: '6',
-  KeyS: 'm7',
-  KeyD: 'M7',
-  KeyF: '9',
-}
-
 /**
- * The one shortcut that survives.
+ * Extensions on the bottom row, not the home row.
  *
- * Everything else is reached by selecting a dial (1-9) and turning it
- * (arrows) or pressing it (Enter). Latch, preset browsing and tier cycling
- * all used to live here and were removed — each was a second, undocumented
- * way to reach something the encoder row already covers.
- *
- * Voicing is different in kind. It is the one control you reach for *while a
- * chord is sounding*, which is exactly when your other hand is on the
- * keyboard and cannot go and select a dial first. The hardware gives it a
- * dedicated knob under your left hand for the same reason; `-` and `+` are
- * the closest a computer keyboard gets.
- *
- * Hold Ctrl and the same keys walk the *bass* voicing — the deck's second,
- * smaller knob, and the same argument applies to it.
+ * `A S D F` is the obvious choice and it is the wrong one: a chord with an
+ * extension needs three keys down at once, and on many keyboards the home row
+ * sits in the same matrix neighbourhood as `Q W E R`, so the third keystroke is
+ * silently dropped. `Z X C V` is one row further away and stays under the same
+ * hand.
  */
-export const VOICING_KEYS: Readonly<Record<string, number>> = {
-  Minus: -1,
-  Equal: 1,
-  NumpadSubtract: -1,
-  NumpadAdd: 1,
+export const EXTENSION_KEYS: Readonly<Record<string, Extension>> = {
+  KeyZ: '6',
+  KeyX: 'm7',
+  KeyC: 'M7',
+  KeyV: '9',
 }
 
-/** The seven keys drawn as white keys, low to high. */
 export const WHITE_KEYS: readonly string[] = [
   'KeyG',
   'KeyH',
@@ -82,175 +66,98 @@ export const WHITE_KEYS: readonly string[] = [
   'Quote',
 ]
 
-/** The five keys drawn as black keys, low to high. */
 export const BLACK_KEYS: readonly string[] = ['KeyY', 'KeyU', 'KeyO', 'KeyP', 'BracketLeft']
 
-/**
- * How the twelve physical keys map onto pitch.
- *
- * `chromatic` and `correct` share a layout and differ only in what an
- * out-of-key root produces; `scale` re-maps the keyboard itself.
- */
-export type RootLayout = 'chromatic' | 'correct' | 'scale'
-
-export const ROOT_LAYOUT_LABEL: Record<RootLayout, string> = {
-  chromatic: 'Chromatic',
-  correct: 'Correct',
-  scale: 'Scale',
-}
+/** Which white key each black key sits after — the shape that reads as a piano. */
+export const BLACK_AFTER = [0, 1, 3, 4, 5]
 
 /**
  * Which pitch each physical key plays.
  *
- * In `scale` layout the keyboard collapses to seven keys: G H J K L ; ' walk
- * the notes of the mode, and the black keys drop out entirely.
- *
- * Keeping the black keys and giving them the five leftover chromatic notes was
- * the obvious alternative, and it reads terribly — the leftovers interleave with
- * the scale, so in C Dorian the keybed spells `C D♭ D E E♭ F …` and no longer
- * ascends. Seven keys in a row is what "the notes of the mode" actually looks
- * like. Chromatic colour stays one switch away.
- *
- * This is our answer to the twelve-keys-versus-seven-degrees problem flagged in
- * research/04-key-mode-and-harmony.md.
+ * In `scale` mode the keybed collapses to seven keys walking the mode, and the
+ * black keys drop out entirely. Keeping them and handing them the five leftover
+ * chromatic notes is the obvious alternative and it reads terribly — the
+ * leftovers interleave with the scale, so C Dorian spells `C D♭ D E E♭ F` and
+ * stops ascending. Seven keys in a row is what "the notes of the mode" looks
+ * like; chromatic colour is one switch away.
  */
-export function rootMap(layout: RootLayout, key: Key): Record<string, RootId> {
-  const map: Record<string, RootId> = {}
+let cached: { mode: RootMode; tonic: number; keyMode: string; map: Record<string, PitchClass> } | undefined
 
-  if (layout === 'scale') {
-    const scale = scaleRoots(key)
+export function rootMap(mode: RootMode, key: Key): Record<string, PitchClass> {
+  // Called on every keydown *and* keyup, so it must not allocate. The answer
+  // depends on exactly three values; hold on to the last one.
+  if (
+    cached &&
+    cached.mode === mode &&
+    cached.tonic === key.tonic &&
+    cached.keyMode === key.mode
+  ) {
+    return cached.map
+  }
+
+  let map: Record<string, PitchClass>
+  if (mode !== 'scale') {
+    map = ROOT_KEYS as Record<string, PitchClass>
+  } else {
+    map = {}
+    const scale = scaleNotes(key)
     WHITE_KEYS.forEach((code, i) => {
       const pc = scale[i]
       if (pc !== undefined) map[code] = pc
     })
-  } else {
-    Object.assign(map, ROOT_KEYS)
   }
 
+  cached = { mode, tonic: key.tonic, keyMode: key.mode, map }
   return map
 }
 
-/**
- * A root, encoded as `pitchClass + 12 × octaveShift`.
- *
- * Carrying the shift in the same value keeps the octave key distinguishable
- * from the tonic it doubles — otherwise both are pitch class 0 and the two
- * collide in the held-roots stack.
- */
-export type RootId = number
-
-export function pitchClassOf(root: RootId): PitchClass {
-  return ((root % 12) + 12) % 12
-}
-
-export function octaveShiftOf(root: RootId): number {
-  return Math.floor(root / 12)
-}
-
-/** Ordered root keys, low to high — the keybed's left-to-right order. */
-export const KEYBED_ORDER: readonly string[] = [
-  'KeyG',
-  'KeyY',
-  'KeyH',
-  'KeyU',
-  'KeyJ',
-  'KeyK',
-  'KeyO',
-  'KeyL',
-  'KeyP',
-  'Semicolon',
-  'BracketLeft',
-  'Quote',
-]
-
-/** True for the five keys drawn as black keys. */
-export function isBlackKey(code: string): boolean {
-  const pc = ROOT_KEYS[code]
-  return pc !== undefined && [1, 3, 6, 8, 10].includes(pc)
-}
-
-/**
- * What is printed on the physical keycap, for the silkscreen legends in
- * research/11-webapp-implications.md §1c.
- *
- * US QWERTY fallback. `resolveLegends` upgrades these using the Keyboard Map
- * API where the browser supports it.
- */
-const US_LEGEND: Readonly<Record<string, string>> = {
-  KeyQ: 'q',
-  KeyW: 'w',
-  KeyE: 'e',
-  KeyR: 'r',
-  KeyA: 'a',
-  KeyS: 's',
-  KeyD: 'd',
-  KeyF: 'f',
-  KeyG: 'g',
-  KeyY: 'y',
-  KeyH: 'h',
-  KeyU: 'u',
-  KeyJ: 'j',
-  KeyK: 'k',
-  KeyO: 'o',
-  KeyL: 'l',
-  KeyP: 'p',
+/** US QWERTY legends, upgraded per-keyboard where the browser allows it. */
+const US: Readonly<Record<string, string>> = {
+  KeyQ: 'Q',
+  KeyW: 'W',
+  KeyE: 'E',
+  KeyR: 'R',
+  KeyZ: 'Z',
+  KeyX: 'X',
+  KeyC: 'C',
+  KeyV: 'V',
+  KeyG: 'G',
+  KeyY: 'Y',
+  KeyH: 'H',
+  KeyU: 'U',
+  KeyJ: 'J',
+  KeyK: 'K',
+  KeyO: 'O',
+  KeyL: 'L',
+  KeyP: 'P',
   Semicolon: ';',
   BracketLeft: '[',
-  BracketRight: ']',
   Quote: "'",
-  Comma: ',',
-  Period: '.',
-  Minus: '-',
-  Equal: '=',
-  Space: 'space',
-  Escape: 'esc',
-  KeyZ: 'z',
-  KeyX: 'x',
-  KeyC: 'c',
-  KeyV: 'v',
-  KeyB: 'b',
-  KeyN: 'n',
-  KeyM: 'm',
-  Slash: '/',
-  Enter: '⏎',
-  Backquote: '`',
-  Digit1: '1',
-  Digit2: '2',
-  Digit3: '3',
-  Digit4: '4',
-  Digit5: '5',
-  Digit6: '6',
-  Digit7: '7',
-  Digit8: '8',
-  Digit9: '9',
-  Digit0: '0',
 }
 
-export type LegendMap = Readonly<Record<string, string>>
-
-/** The US QWERTY legends, used as-is when the Keyboard Map API is unavailable. */
-export const DEFAULT_LEGENDS: LegendMap = US_LEGEND
+export type Legends = Readonly<Record<string, string>>
+export const DEFAULT_LEGENDS: Legends = US
 
 /**
- * Resolve what each bound key actually shows on this user's keyboard.
+ * What each bound key actually shows on this keyboard.
  *
- * Chromium-only (`navigator.keyboard`); everywhere else this resolves to the US
- * defaults. The *bindings* never change — only the printed labels.
+ * Chromium-only; everywhere else this resolves to the US defaults. The
+ * *bindings* never change — only the printed labels.
  */
-export async function resolveLegends(): Promise<LegendMap> {
+export async function resolveLegends(): Promise<Legends> {
   const keyboard = (navigator as Navigator & { keyboard?: KeyboardApi }).keyboard
-  if (!keyboard?.getLayoutMap) return US_LEGEND
+  if (!keyboard?.getLayoutMap) return US
 
   try {
     const map = await keyboard.getLayoutMap()
-    const resolved: Record<string, string> = { ...US_LEGEND }
-    for (const code of Object.keys(US_LEGEND)) {
+    const out: Record<string, string> = { ...US }
+    for (const code of Object.keys(US)) {
       const label = map.get(code)
-      if (label) resolved[code] = label
+      if (label) out[code] = label.toUpperCase()
     }
-    return resolved
+    return out
   } catch {
-    return US_LEGEND
+    return US
   }
 }
 

@@ -1,28 +1,15 @@
 /**
- * Performance modes.
+ * Performance modes — how a chord is articulated once it has been voiced.
  *
- * Takes the block chord the voicing engine produced and articulates it —
- * strummed, slopped, arpeggiated, patterned or swept. This is a *transformation*
- * sitting between the chord engine and the synth, which is exactly how the
- * hardware treats it: the raw chord and the performed notes go out on separate
- * MIDI channels.
- *
- * Pure and dependency-free. Emits timing data; something else plays it.
- *
- * See research/06-performance-modes.md.
+ * Pure: this emits *when* to play each note, and something else plays it. The
+ * split matters because it keeps the timing logic testable without an audio
+ * context, and because the raw chord and the performed chord are genuinely
+ * different things — the instrument sends them on separate MIDI channels.
  */
 
 import type { MidiNote } from './types.js'
 
-export type PerformMode =
-  | 'off'
-  | 'strum'
-  | 'strum2'
-  | 'slop'
-  | 'arp'
-  | 'arp2'
-  | 'pattern'
-  | 'harp'
+export type PerformMode = 'off' | 'strum' | 'strum2' | 'slop' | 'arp' | 'arp2' | 'pattern' | 'harp'
 
 export const PERFORM_MODES: readonly PerformMode[] = [
   'off',
@@ -33,69 +20,58 @@ export const PERFORM_MODES: readonly PerformMode[] = [
   'arp2',
   'pattern',
   'harp',
-] as const
+]
 
 export const PERFORM_LABEL: Record<PerformMode, string> = {
-  off: 'Off',
+  off: 'Block',
   strum: 'Strum',
-  strum2: 'Strum 2oct',
+  strum2: 'Strum 2 Octaves',
   slop: 'Slop',
-  arp: 'Arp',
-  arp2: 'Arp 2oct',
+  arp: 'Arpeggiate',
+  arp2: 'Arp 2 Octaves',
   pattern: 'Pattern',
   harp: 'Harp',
 }
 
 /** A note struck at an offset from the trigger, sustaining until released. */
-export interface StruckNote {
+export interface Struck {
   readonly note: MidiNote
-  /** Seconds after the trigger. */
+  /** Seconds after the key went down. */
   readonly time: number
   readonly velocity: number
 }
 
-/** Strum-family modes: every note fires once, then sustains. */
+/** Strum-family: every note fires once, then holds. */
 export interface OneShot {
   readonly kind: 'oneshot'
-  readonly events: readonly StruckNote[]
+  readonly events: readonly Struck[]
 }
 
-/** Arp-family modes: a repeating step sequence, running until released. */
+/** Arp-family: a step sequence that repeats until the key is released. */
 export interface Cycle {
   readonly kind: 'cycle'
   /** One entry per step; `null` is a rest. */
   readonly steps: readonly (MidiNote | null)[]
-  /** Seconds per step. */
   readonly stepSeconds: number
-  /** Note length as a fraction of a step, 0-1. */
+  /** Note length as a fraction of a step. */
   readonly gate: number
 }
 
 export type Performance = OneShot | Cycle
 
 export interface PerformOptions {
-  /** 0-1, the Perform dial's secondary parameter. Meaning varies by mode. */
+  /** 0–1. Means something different in every mode; see `amountLabel`. */
   readonly amount?: number
   readonly bpm?: number
-  /** Injectable for deterministic tests. */
+  /** Injectable so Slop can be tested. */
   readonly random?: () => number
-  /**
-   * Options → Instrument → Velocity Sense.
-   *
-   * A computer keyboard has no velocity to sense, but the performance modes
-   * generate plenty of their own — a strum loses energy toward the top of the
-   * sweep and Slop varies every note. "Off for all notes to play at the same
-   * volume" applies to those just as it does to a hand, so switching it off
-   * flattens them.
-   */
-  readonly velocitySense?: boolean
 }
 
-/**
- * Articulate a voiced chord.
- *
- * `notes` must be ascending — the order the voicing engine produced.
- */
+/** True for modes that keep playing while the key is held. */
+export function isCycle(mode: PerformMode): boolean {
+  return mode === 'arp' || mode === 'arp2' || mode === 'pattern'
+}
+
 export function performChord(
   notes: readonly MidiNote[],
   mode: PerformMode,
@@ -109,121 +85,89 @@ export function performChord(
     return { kind: 'oneshot', events: notes.map((note) => ({ note, time: 0, velocity: 0.8 })) }
   }
 
-  const performance = articulate(notes, mode, bpm, amount, random)
-  return opts.velocitySense === false ? flatten(performance) : performance
-}
-
-/** Every note at the same level, for Velocity Sense off. */
-function flatten(p: Performance): Performance {
-  if (p.kind !== 'oneshot') return p
-  return { kind: 'oneshot', events: p.events.map((e) => ({ ...e, velocity: 0.8 })) }
-}
-
-function articulate(
-  notes: readonly MidiNote[],
-  mode: Exclude<PerformMode, 'off'>,
-  bpm: number,
-  amount: number,
-  random: () => number,
-): Performance {
   switch (mode) {
     case 'strum':
-      return strum(notes, strumSpread(amount))
-
+      return strum(notes, spread(amount))
     case 'strum2':
-      return strum(stackOctave(notes), strumSpread(amount))
-
+      return strum(stack(notes, 2), spread(amount))
     case 'slop':
-      return slop(notes, strumSpread(amount), random)
-
+      return slop(notes, spread(amount), random)
     case 'harp':
-      // A fast sweep across three octaves — the dramatic flourish.
-      return strum(stackOctaves(notes, 3), lerp(0.012, 0.045, amount) / 2)
-
+      // Three octaves, swept fast — the flourish.
+      return strum(stack(notes, 3), lerp(0.012, 0.045, amount) / 2)
     case 'arp':
       return arp(notes, bpm, amount)
-
     case 'arp2':
-      return arp(stackOctave(notes), bpm, amount)
-
+      return arp(stack(notes, 2), bpm, amount)
     case 'pattern':
       return pattern(notes, bpm, amount)
   }
 }
 
-// ---------------------------------------------------------------------------
-// Strum family
-// ---------------------------------------------------------------------------
+// --- strum family ----------------------------------------------------------
 
-/** Inter-note delay in seconds, 5ms (tight) to 60ms (loose). */
-function strumSpread(amount: number): number {
-  return lerp(0.005, 0.06, amount)
-}
+/** Gap between notes, 5ms (tight) to 60ms (loose). */
+const spread = (amount: number) => lerp(0.005, 0.06, amount)
 
-function strum(notes: readonly MidiNote[], spread: number): OneShot {
+function strum(notes: readonly MidiNote[], gap: number): OneShot {
   return {
     kind: 'oneshot',
     events: notes.map((note, i) => ({
       note,
-      time: i * spread,
-      // A real strum loses a little energy toward the top of the sweep.
+      time: i * gap,
+      // A real strum loses energy toward the top of the sweep.
       velocity: 0.85 - (i / Math.max(1, notes.length - 1)) * 0.15,
     })),
   }
 }
 
 /**
- * Strum with human timing error.
+ * A strum with human timing error, **biased late**.
  *
- * The jitter is deliberately *biased late* — players drag far more often than
- * they rush, and symmetric noise reads as machine error rather than feel.
+ * Players drag far more often than they rush, and symmetric noise reads as a
+ * broken clock rather than as feel. The exponent skews the distribution toward
+ * zero so most notes are close and a few are noticeably behind.
  */
-function slop(notes: readonly MidiNote[], spread: number, random: () => number): OneShot {
-  const jitter = spread * 0.9
+function slop(notes: readonly MidiNote[], gap: number, random: () => number): OneShot {
+  const jitter = gap * 0.9
   return {
     kind: 'oneshot',
     events: notes.map((note, i) => ({
       note,
-      time: Math.max(0, i * spread + (random() ** 1.6) * jitter - jitter * 0.15),
+      time: Math.max(0, i * gap + random() ** 1.6 * jitter - jitter * 0.15),
       velocity: 0.7 + random() * 0.25,
     })),
   }
 }
 
-// ---------------------------------------------------------------------------
-// Arpeggiator
-// ---------------------------------------------------------------------------
+// --- arpeggiator -----------------------------------------------------------
+
+/** Quarter, eighth, eighth-triplet, sixteenth, sixteenth-triplet. */
+const DIVISIONS = [1, 0.5, 1 / 3, 0.25, 1 / 6] as const
+const DIVISION_LABEL = ['1/4', '1/8', '1/8t', '1/16', '1/16t'] as const
 
 /**
- * Step durations the Perform dial selects between, as fractions of a beat.
- * Quarter, eighth, eighth-triplet, sixteenth, sixteenth-triplet.
- */
-const ARP_DIVISIONS = [1, 0.5, 1 / 3, 0.25, 1 / 6] as const
-
-/**
- * The distinctive rule: **the sequence length is the chord's note count.**
+ * The sequence length is the chord's note count.
  *
- * Add a 9th and the arpeggio gets longer — the rhythm is a consequence of the
- * harmony rather than independent of it. Triads cycle in 3, sevenths in 4,
- * ninths in 5. This is the behaviour worth having above all others here.
+ * Triads cycle in 3, sevenths in 4, ninths in 5 — so adding an extension makes
+ * the arpeggio *longer*, and the rhythm becomes a consequence of the harmony
+ * rather than something set independently of it. This is the single most
+ * characteristic behaviour in the whole performance section.
  */
 function arp(notes: readonly MidiNote[], bpm: number, amount: number): Cycle {
   return {
     kind: 'cycle',
     steps: [...notes],
-    stepSeconds: (60 / bpm) * pick(ARP_DIVISIONS, amount),
+    stepSeconds: (60 / bpm) * pick(DIVISIONS, amount),
     gate: 0.8,
   }
 }
 
-// ---------------------------------------------------------------------------
-// Pattern
-// ---------------------------------------------------------------------------
-
 /**
- * Fixed rhythmic sequences. Unlike the arpeggiator, the rhythm stays constant
- * however many notes the chord has — entries index into the chord and wrap, and
- * `null` is a rest.
+ * Fixed rhythms that keep their shape whatever the chord contains.
+ *
+ * The opposite of the arpeggiator: entries index into the chord and wrap, so
+ * the pattern stays recognisable across a triad and a ninth. `null` is a rest.
  */
 const PATTERNS: readonly (readonly (number | null)[])[] = [
   [0, null, 1, null, 2, null, 1, null],
@@ -234,9 +178,6 @@ const PATTERNS: readonly (readonly (number | null)[])[] = [
   [0, 0, 1, 2, 0, 0, 2, 1],
   [2, null, 1, null, 0, null, 1, null],
   [0, 1, null, 2, 3, null, 2, 1],
-  [0, null, null, null, 2, null, 1, null],
-  [0, 3, 1, 2, 0, 3, 1, 2],
-  [0, 1, 2, 3, 0, 1, 2, 3],
 ]
 
 export const PATTERN_COUNT = PATTERNS.length
@@ -246,25 +187,42 @@ function pattern(notes: readonly MidiNote[], bpm: number, amount: number): Cycle
   return {
     kind: 'cycle',
     steps: chosen.map((i) => (i === null ? null : notes[i % notes.length]!)),
-    stepSeconds: (60 / bpm) * 0.25, // sixteenths
+    stepSeconds: (60 / bpm) * 0.25,
     gate: 0.7,
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** The chord, plus a copy an octave up, ascending. */
-function stackOctave(notes: readonly MidiNote[]): MidiNote[] {
-  return stackOctaves(notes, 2)
+/**
+ * What the amount dial reads, in the units it actually has.
+ *
+ * Showing a percentage would be dishonest: the parameter is not continuous and
+ * does not mean the same thing twice. For the arpeggiators it selects one of
+ * five note divisions, for Pattern one of eight rhythms, and only for the strum
+ * family is it a continuous spread. "63%" tells you none of that.
+ */
+export function amountLabel(mode: PerformMode, amount: number): string {
+  const a = clamp01(amount)
+  switch (mode) {
+    case 'off':
+      return ''
+    case 'arp':
+    case 'arp2':
+      return pick(DIVISION_LABEL, a)
+    case 'pattern':
+      return `no. ${Math.min(PATTERN_COUNT, Math.floor(a * PATTERN_COUNT) + 1)}`
+    case 'harp':
+      return `${Math.round((lerp(0.012, 0.045, a) / 2) * 1000)} ms`
+    default:
+      return `${Math.round(spread(a) * 1000)} ms`
+  }
 }
 
-function stackOctaves(notes: readonly MidiNote[], octaves: number): MidiNote[] {
+// --- helpers ---------------------------------------------------------------
+
+/** The chord plus copies an octave up, ascending. */
+function stack(notes: readonly MidiNote[], octaves: number): MidiNote[] {
   const out: MidiNote[] = []
-  for (let o = 0; o < octaves; o++) {
-    for (const n of notes) out.push(n + 12 * o)
-  }
+  for (let o = 0; o < octaves; o++) for (const n of notes) out.push(n + 12 * o)
   return out.sort((a, b) => a - b)
 }
 
@@ -272,49 +230,5 @@ function pick<T>(items: readonly T[], amount: number): T {
   return items[Math.min(items.length - 1, Math.floor(clamp01(amount) * items.length))]!
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * clamp01(t)
-}
-
-function clamp01(n: number): number {
-  return Math.max(0, Math.min(1, n))
-}
-
-/** True for modes that keep playing while the key is held. */
-export function isContinuous(mode: PerformMode): boolean {
-  return mode === 'arp' || mode === 'arp2' || mode === 'pattern'
-}
-
-const DIVISION_LABEL = ['1/4', '1/8', '1/8T', '1/16', '1/16T'] as const
-
-/**
- * What the Perform amount actually is, in the units it actually has.
- *
- * Showing this as a percentage was dishonest: the parameter is not continuous
- * and does not mean the same thing twice. For the arpeggiators it picks one of
- * five note divisions; for Pattern it picks one of eleven rhythms; only for the
- * strum family is it a continuous spread. "63%" told you none of that.
- */
-export function performAmountLabel(mode: PerformMode, amount: number): string {
-  const a = Math.max(0, Math.min(1, amount))
-
-  switch (mode) {
-    case 'off':
-      return ''
-
-    case 'arp':
-    case 'arp2':
-      return DIVISION_LABEL[Math.min(DIVISION_LABEL.length - 1, Math.floor(a * DIVISION_LABEL.length))]!
-
-    case 'pattern':
-      return `no. ${Math.min(PATTERN_COUNT, Math.floor(a * PATTERN_COUNT) + 1)}`
-
-    case 'strum':
-    case 'strum2':
-    case 'slop':
-      return `${Math.round(strumSpread(a) * 1000)} ms`
-
-    case 'harp':
-      return `${Math.round((lerp(0.012, 0.045, a) / 2) * 1000)} ms`
-  }
-}
+const lerp = (a: number, b: number, t: number) => a + (b - a) * clamp01(t)
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n))

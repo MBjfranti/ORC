@@ -1,133 +1,102 @@
 /**
- * Resolving panel state into an actual chord.
+ * Turning panel state into an actual chord.
  *
- * This is the join between the chord engine, Key Mode and the voicing engine —
- * still pure, still testable, no audio and no React.
+ * The join between the pads, Key Mode, the chord engine and the voicing
+ * engine — still pure, still testable, no audio anywhere near it.
  */
 
-import { buildChord, chordParts, chordSuffix, secretChordFor } from './chord.js'
+import { buildChord, chordName } from './chord.js'
 import { chordForRoot } from './key.js'
-import { secretChordsApply } from './playStyle.js'
-import type { PlayStyle, SecretChordMode } from './playStyle.js'
 import { noteName } from './spelling.js'
+import { mod12 } from './types.js'
 import { voiceChord } from './voicing.js'
 import type { ChromaticPolicy } from './key.js'
 import type { ChordSpec, ChordType, Extension, Key, MidiNote, PitchClass } from './types.js'
 
 export interface ResolveInput {
   readonly root: PitchClass
-  /** All chord-type buttons held. Two or more may reach a Secret Chord. */
-  readonly heldTypes: readonly ChordType[]
+  /** Chord-type pads currently down. */
+  readonly types: readonly ChordType[]
   readonly extensions: readonly Extension[]
-  /** Options → Instrument → Secret Chords. Defaults to the hardware's `simple`. */
-  readonly secretChords?: SecretChordMode
-  readonly playStyle?: PlayStyle
   readonly keyMode: boolean
   readonly key: Key
-  readonly chromatic?: ChromaticPolicy
+  readonly chromatic: ChromaticPolicy
+  /** Which octave the voicing window starts in. */
   readonly octave: number
+  /** Position along the infinite note stack. */
   readonly voicing: number
 }
 
-export interface ResolvedChord {
+export interface Resolved {
   readonly spec: ChordSpec
   readonly notes: MidiNote[]
-  /** Display name, e.g. `Dm9`. Empty when nothing would sound. */
-  readonly name: string
-  /**
-   * The same name split where the screen splits it: `root + base` at full
-   * size, `ext` as a superscript. See the notation plates in the manual §6.5.
-   */
+  /** `C`, `F♯`, `B♭` — the root, spelled for the key. */
   readonly root: string
-  readonly ext: string
-  /** Roman numeral in Key Mode, otherwise empty. */
+  /** Baseline suffix, e.g. the `m` of `Cm7`. */
+  readonly base: string
+  /** Superscript suffix, e.g. the `7` of `Cm7`. */
+  readonly sup: string
+  /** Roman numeral, in Key Mode only. */
   readonly numeral: string
+  /** True when Key Mode reached outside the scale for this chord. */
+  readonly borrowed: boolean
 }
 
 /**
- * Work out what a given root key would play right now.
+ * What a given root key would play right now.
  *
- * Also used to populate the third tier on every key — which is why it must be
- * cheap and side-effect free. See research/11-webapp-implications.md §1c.
+ * Returns `undefined` when nothing would sound as a chord — no pad held and
+ * Key Mode off, which is a single note rather than a chord.
+ *
+ * Cheap and side-effect free on purpose: it also populates the label on every
+ * key of the keybed, so it runs twelve times per render.
  */
-export function resolveChord(input: ResolveInput): ResolvedChord | undefined {
-  const { root, heldTypes, extensions, keyMode, key, octave, voicing } = input
-
-  // A secret chord replaces the triad outright, so it is resolved first and
-  // wins over both the single-button type and Key Mode's diatonic quality —
-  // holding two buttons is an unambiguous statement about what you want.
-  const secret = secretChordsApply(input.secretChords ?? 'simple', input.playStyle ?? 'simple')
-    ? secretChordFor(heldTypes)
-    : undefined
+export function resolveChord(input: ResolveInput): Resolved | undefined {
+  const { root, types, extensions, keyMode, key, octave, voicing } = input
 
   let type: ChordType
   let actualRoot = root
   let numeral = ''
-  let allExtensions = extensions
+  let borrowed = false
 
-  if (secret) {
-    // Key Mode still supplies the root; the quality comes from the combination.
-    const degree = keyMode ? chordForRoot(root, key, policy(input)) : undefined
-    actualRoot = degree?.root ?? root
-    numeral = degree?.numeral ?? ''
-    type = 'maj'
-  } else if (heldTypes.length > 0) {
+  if (types.length > 0) {
     /*
-     * A held Chord Type button overrides Key Mode.
+     * A held pad overrides Key Mode, and the root is the key you actually
+     * pressed — an override is a statement about *this* chord, so nothing
+     * about it gets quantised. The numeral stays blank because the chord is no
+     * longer a degree of the key.
      *
-     * "You can override key mode temporarily by playing chords as usual using
-     * the Chord Type buttons" (§9.3). Key Mode used to be checked first, so
-     * holding Min and pressing G♯ in the key of C gave whatever the scale
-     * wanted — G♯ is not in C, so it was snapped to G and suspended, and
-     * G♯m6 was simply unreachable without switching Key Mode off.
-     *
-     * The root is the key you actually pressed, too: an override is a
-     * statement about *this* chord, so nothing about it gets quantised.
-     *
-     * Numeral stays blank because the chord is no longer a degree of the key
-     * — the numeral describes Key Mode's choice, and this isn't it.
+     * The most recent pad wins, so rolling a finger from Maj onto Min lands on
+     * Min rather than on some combination of the two.
      */
-    // The most recently pressed button wins, so rolling from Maj onto Min
-    // lands on Min rather than nothing.
-    type = heldTypes[heldTypes.length - 1]!
+    type = types[types.length - 1]!
   } else if (keyMode) {
-    const degree = chordForRoot(root, key, policy(input))
+    const degree = chordForRoot(root, key, input.chromatic)
     type = degree.type
     actualRoot = degree.root
     numeral = degree.numeral
-    if (degree.forcedExtension && !extensions.includes(degree.forcedExtension)) {
-      allExtensions = [...extensions, degree.forcedExtension]
-    }
+    borrowed = degree.borrowed
   } else {
-    // Nothing held and no Key Mode: a single note, not a chord.
     return undefined
   }
 
-  const spec: ChordSpec = secret
-    ? { root: actualRoot, type, extensions: allExtensions, secret }
-    : { root: actualRoot, type, extensions: allExtensions }
+  const spec: ChordSpec = { root: actualRoot, type, extensions }
   const intervals = buildChord(spec)
-  const rootMidi = 12 * (octave + 1) + actualRoot
-  const notes = voiceChord(intervals, rootMidi, voicing)
-
-  const printed = noteName(actualRoot, keyMode ? key : undefined)
-  const parts = chordParts(spec)
+  const notes = voiceChord(intervals, 12 * (octave + 1) + actualRoot, voicing)
+  const name = chordName(spec)
 
   return {
     spec,
     notes,
-    name: printed + chordSuffix(spec),
-    root: printed + parts.base,
-    ext: parts.ext,
+    root: noteName(actualRoot, keyMode ? key : undefined),
+    base: name.base,
+    sup: name.sup,
     numeral,
+    borrowed,
   }
 }
 
-function policy(input: ResolveInput) {
-  return input.chromatic ? { chromatic: input.chromatic } : {}
-}
-
-/** A single note, for when no chord type is held and Key Mode is off. */
+/** A bare note, for when no pad is held and Key Mode is off. */
 export function resolveSingleNote(root: PitchClass, octave: number): MidiNote {
-  return 12 * (octave + 1) + root
+  return 12 * (octave + 1) + mod12(root)
 }

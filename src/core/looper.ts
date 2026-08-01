@@ -1,209 +1,164 @@
 /**
- * The looper.
+ * The looper, as data.
  *
- * A *note* looper, not an audio one — it records what you played and replays it
- * through whatever sound is currently selected, so browsing presets after the
- * fact changes the playback. That is how the hardware behaves, and it is the
- * more useful behaviour: the loop is a performance you can re-voice, not a
- * bounce you're stuck with.
+ * A **note** looper, not an audio one: it records what you played, not what it
+ * sounded like. That is what lets you change the voice, the articulation or the
+ * key *after* recording and have the loop follow — which is the whole reason
+ * the instrument's looper is interesting rather than a tape delay.
  *
- * Pure and dependency-free. Emits and stores timing data; something else plays it.
- *
- * See research/08-looper-and-beats.md.
+ * Pure: this owns *what* was played. `engine/looper.ts` owns *when*.
  */
 
-import type { MidiNote } from './types.js'
-import { barSeconds, DEFAULT_TIME_SIGNATURE } from './timeSignature.js'
-import type { TimeSignature } from './timeSignature.js'
-
-/** Which output a recorded note belongs to, so playback can route it back. */
-export type LoopStream = 'performance' | 'bass'
+export type Stream = 'chord' | 'bass'
 
 export interface LoopEvent {
-  /** Seconds from the start of the loop. */
+  /** Seconds from the top of the loop. */
   readonly time: number
-  readonly note: MidiNote
+  readonly note: number
   readonly velocity: number
-  /** Seconds. Notes still held when recording ends are clamped to the loop. */
   readonly duration: number
-  readonly stream: LoopStream
+  readonly stream: Stream
 }
 
-/** One overdub pass. Kept separate so undo can peel them off one at a time. */
-export interface LoopLayer {
+/** One recording pass. Layers stack; undo removes the last. */
+export interface Layer {
   readonly events: readonly LoopEvent[]
 }
 
 export interface Loop {
-  readonly lengthSeconds: number
-  /** Bar count, or `null` for a free-length loop. */
+  /** Bars, or `null` for a free-length loop. */
   readonly bars: number | null
-  readonly layers: readonly LoopLayer[]
+  readonly lengthSeconds: number
+  readonly layers: readonly Layer[]
 }
 
-/** Bar counts the Loop dial offers, plus free-running. */
-export const LOOP_BARS: readonly (number | null)[] = [1, 2, 4, 8, 16, null]
+export const LOOP_BARS: readonly (number | null)[] = [null, 1, 2, 4, 8, 16]
 
 export function barsLabel(bars: number | null): string {
-  return bars === null ? 'Free' : `${bars} bar${bars === 1 ? '' : 's'}`
-}
-
-/**
- * How long a bar-locked loop runs.
- *
- * Takes the meter, which this used to assume was always 4/4 — the manual
- * documents a time-signature menu on the BPM encoder (§11.2), so a 3/4 loop
- * has to be three quarters long, not four.
- */
-export function barsToSeconds(
-  bars: number,
-  bpm: number,
-  ts: TimeSignature = DEFAULT_TIME_SIGNATURE,
-): number {
-  return barSeconds(ts, bpm) * bars
+  if (bars === null) return 'Free'
+  return bars === 1 ? '1 bar' : `${bars} bars`
 }
 
 export function emptyLoop(lengthSeconds: number, bars: number | null): Loop {
-  return { lengthSeconds, bars, layers: [] }
+  return { bars, lengthSeconds, layers: [] }
 }
 
-export function isEmpty(loop: Loop | undefined): boolean {
-  return !loop || loop.layers.every((l) => l.events.length === 0)
+export function barsToSeconds(bars: number, bpm: number, beatsPerBar = 4): number {
+  return (60 / bpm) * beatsPerBar * bars
 }
 
-export function layerCount(loop: Loop | undefined): number {
-  return loop?.layers.length ?? 0
-}
+export const withLayer = (loop: Loop, events: readonly LoopEvent[]): Loop => ({
+  ...loop,
+  layers: [...loop.layers, { events }],
+})
 
-/** Add an overdub pass. Empty passes are dropped so undo never has to no-op. */
-export function withLayer(loop: Loop, events: readonly LoopEvent[]): Loop {
-  if (events.length === 0) return loop
-  return { ...loop, layers: [...loop.layers, { events: [...events] }] }
-}
+export const undoLayer = (loop: Loop): Loop => ({ ...loop, layers: loop.layers.slice(0, -1) })
 
-/**
- * Remove the most recent pass.
- *
- * Undoing past the last layer leaves an empty loop rather than `undefined` —
- * the hardware's Undo turns into Clear at exactly that point, and keeping the
- * length lets you record into it again without re-choosing bars.
- */
-export function undoLayer(loop: Loop): Loop {
-  return { ...loop, layers: loop.layers.slice(0, -1) }
-}
-
-export function clearLayers(loop: Loop): Loop {
-  return { ...loop, layers: [] }
-}
-
-/** Every event across every layer, in time order. */
-export function allEvents(loop: Loop): LoopEvent[] {
-  return loop.layers.flatMap((l) => l.events).sort((a, b) => a.time - b.time)
-}
-
-// ---------------------------------------------------------------------------
-// Quantization
-// ---------------------------------------------------------------------------
-
-/** Note values the Quantize setting offers, as fractions of a beat. */
-export const QUANTIZE_GRIDS = {
-  off: 0,
-  '1/4': 1,
-  '1/8': 0.5,
-  '1/8T': 1 / 3,
-  '1/16': 0.25,
-  '1/16T': 1 / 6,
-  '1/32': 0.125,
-} as const
-
-export type QuantizeGrid = keyof typeof QUANTIZE_GRIDS
-
-export const QUANTIZE_ORDER: readonly QuantizeGrid[] = [
-  'off',
-  '1/4',
-  '1/8',
-  '1/8T',
-  '1/16',
-  '1/16T',
-  '1/32',
-]
-
-/**
- * Snap event start times to a grid, wrapping the last gridline round to zero.
- *
- * A note played a hair before the downbeat should land *on* it, not at the very
- * end of the loop — so anything that rounds up to the loop length wraps to 0.
- * Durations are left alone: quantizing note lengths turns a legato pad into a
- * stutter, and the ear notices starts far more than ends.
- */
-export function quantizeEvents(
-  events: readonly LoopEvent[],
-  grid: QuantizeGrid,
-  bpm: number,
-  lengthSeconds: number,
-): LoopEvent[] {
-  const beats = QUANTIZE_GRIDS[grid]
-  if (!beats) return [...events]
-
-  const step = (60 / bpm) * beats
-  return events.map((e) => {
-    const snapped = Math.round(e.time / step) * step
-    return { ...e, time: snapped >= lengthSeconds ? 0 : snapped }
-  })
-}
+export const isEmpty = (loop: Loop | undefined): boolean =>
+  !loop || loop.layers.every((l) => l.events.length === 0)
 
 // ---------------------------------------------------------------------------
 // Recording
 // ---------------------------------------------------------------------------
 
 /**
- * Accumulates a single pass.
+ * Collects note-ons and pairs them with their note-offs.
  *
- * Notes are opened on attack and closed on release; anything still held when
- * the pass ends is clamped to the loop boundary rather than dropped, so a pad
- * you were still leaning on survives.
+ * Notes still held when the pass ends are closed at the boundary rather than
+ * discarded — you should be able to hold a chord across the loop point and have
+ * it recorded, which is exactly how people actually play a pad into a looper.
  */
-export class LoopRecorder {
-  private events: LoopEvent[] = []
-  private open = new Map<string, { time: number; note: MidiNote; velocity: number; stream: LoopStream }>()
+export class Recorder {
+  private open = new Map<string, { time: number; velocity: number }>()
+  private done: LoopEvent[] = []
 
-  noteOn(time: number, note: MidiNote, velocity: number, stream: LoopStream): void {
-    this.open.set(`${stream}:${note}`, { time, note, velocity, stream })
+  private static id(note: number, stream: Stream) {
+    return `${stream}:${note}`
   }
 
-  noteOff(time: number, note: MidiNote, stream: LoopStream): void {
-    const key = `${stream}:${note}`
-    const started = this.open.get(key)
+  noteOn(time: number, note: number, velocity: number, stream: Stream): void {
+    this.open.set(Recorder.id(note, stream), { time, velocity })
+  }
+
+  noteOff(time: number, note: number, stream: Stream): void {
+    const id = Recorder.id(note, stream)
+    const started = this.open.get(id)
     if (!started) return
-    this.open.delete(key)
-    this.events.push({
-      time: started.time,
-      note,
-      velocity: started.velocity,
-      duration: Math.max(0.02, time - started.time),
-      stream,
-    })
+    this.open.delete(id)
+    // A release that wraps past the loop point lands before its own attack.
+    // Treat it as running to the boundary; `finish` will clamp it.
+    const duration = Math.max(0.02, time - started.time)
+    this.done.push({ time: started.time, note, velocity: started.velocity, duration, stream })
   }
 
-  /** Close the pass, clamping anything still sounding to `lengthSeconds`. */
-  finish(lengthSeconds: number): LoopEvent[] {
-    for (const started of this.open.values()) {
-      this.events.push({
+  /** Close the pass, ending any note still held at `length`. */
+  finish(length: number): LoopEvent[] {
+    for (const [id, started] of this.open) {
+      const [stream, note] = id.split(':') as [Stream, string]
+      this.done.push({
         time: started.time,
-        note: started.note,
+        note: Number(note),
         velocity: started.velocity,
-        duration: Math.max(0.02, lengthSeconds - started.time),
-        stream: started.stream,
+        duration: Math.max(0.02, length - started.time),
+        stream,
       })
     }
     this.open.clear()
 
-    const out = this.events.filter((e) => e.time < lengthSeconds).sort((a, b) => a.time - b.time)
-    this.events = []
-    return out
+    const events = this.done
+      .map((e) => ({ ...e, duration: length > 0 ? Math.min(e.duration, length) : e.duration }))
+      .sort((a, b) => a.time - b.time)
+    this.done = []
+    return events
   }
 
-  get isEmpty(): boolean {
-    return this.events.length === 0 && this.open.size === 0
+  get recording(): boolean {
+    return this.open.size > 0 || this.done.length > 0
   }
+}
+
+// ---------------------------------------------------------------------------
+// Quantization
+// ---------------------------------------------------------------------------
+
+export type Grid = 'off' | '1/4' | '1/8' | '1/8t' | '1/16' | '1/16t' | '1/32'
+
+export const GRIDS: readonly Grid[] = ['off', '1/4', '1/8', '1/8t', '1/16', '1/16t', '1/32']
+
+/** Grid size as a fraction of a beat. */
+const GRID_BEATS: Record<Exclude<Grid, 'off'>, number> = {
+  '1/4': 1,
+  '1/8': 0.5,
+  '1/8t': 1 / 3,
+  '1/16': 0.25,
+  '1/16t': 1 / 6,
+  '1/32': 0.125,
+}
+
+/**
+ * Snap note starts to a grid.
+ *
+ * **Starts only.** Quantizing durations turns a legato pad into a stutter, and
+ * the ear notices where a note begins far more than where it ends.
+ *
+ * A note played a hair before the downbeat should land *on* it rather than at
+ * the very end of the loop, so anything that rounds up to the full length wraps
+ * back to zero.
+ */
+export function quantize(
+  events: readonly LoopEvent[],
+  grid: Grid,
+  bpm: number,
+  length: number,
+): LoopEvent[] {
+  if (grid === 'off') return [...events]
+  const step = (60 / bpm) * GRID_BEATS[grid]
+  if (step <= 0) return [...events]
+
+  return events
+    .map((e) => {
+      const snapped = Math.round(e.time / step) * step
+      return { ...e, time: length > 0 && snapped >= length ? 0 : snapped }
+    })
+    .sort((a, b) => a.time - b.time)
 }
