@@ -24,7 +24,7 @@
 import * as Tone from 'tone'
 
 import type { MidiNote } from '../core/types.js'
-import { soundAt } from './sounds.js'
+import { decayFor, soundAt } from './sounds.js'
 import type { Sound } from './sounds.js'
 
 const midiToFreq = (note: MidiNote) => 440 * Math.pow(2, (note - 69) / 12)
@@ -435,9 +435,9 @@ class Synth {
 
     const envelope = {
       attack: sound.attack,
-      decay: sound.decay,
+      decay: decayFor(sound.decay),
       sustain: sound.sustain,
-      release: sound.release,
+      release: decayFor(sound.release),
     }
 
     if (sound.engine === 'sub') {
@@ -449,6 +449,15 @@ class Synth {
         harmonicity: sound.harmonicity ?? 3,
         modulationIndex: sound.index ?? 10,
         envelope,
+        // The modulator's envelope is what makes a struck sound struck: it
+        // collapses the brightness while the body rings on. Leaving it fixed
+        // gives every FM preset one colour and they all blur together.
+        modulationEnvelope: {
+          attack: sound.modAttack ?? 0.004,
+          decay: decayFor(sound.modDecay ?? 0.1),
+          sustain: sound.modSustain ?? 0.1,
+          release: decayFor(sound.modRelease ?? 0.1),
+        },
         volume: sound.volume,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any)

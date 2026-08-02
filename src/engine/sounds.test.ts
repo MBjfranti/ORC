@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { soundAt, soundLabel, soundNumber, SOUNDS } from './sounds.js'
+import { decayFor, soundAt, soundLabel, soundNumber, SOUNDS } from './sounds.js'
 
 describe('the sound library', () => {
   it('holds fifty numbered sounds', () => {
@@ -48,6 +48,71 @@ describe('the sound library', () => {
       expect(sound.release).toBeGreaterThan(0)
       expect(sound.decay + sound.sustain).toBeGreaterThan(0)
       expect(sound.attack).toBeLessThan(2.5)
+    }
+  })
+
+  it('keeps decay and release as time constants, not durations', () => {
+    // These are the source table's units, and the difference is a factor of
+    // fifty: a decay of 0.7 becomes 39.8 in Tone's units. Anything much above
+    // 1 here is a value that was pasted in already converted, which would ring
+    // for the rest of the session.
+    for (const sound of SOUNDS) {
+      expect(sound.decay).toBeLessThanOrEqual(0.8)
+      expect(sound.release).toBeLessThanOrEqual(0.3)
+      expect(sound.sustain).toBeGreaterThanOrEqual(0)
+      expect(sound.sustain).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('gives every modulated sound a modulation envelope', () => {
+    // Without it the modulator sits at one depth for the life of the note, and
+    // a vibraphone and a brass section come out the same brightness. This is
+    // what makes a struck sound struck.
+    for (const sound of SOUNDS) {
+      if (sound.engine === 'sub') continue
+      expect(sound.modAttack).toBeDefined()
+      expect(sound.modDecay).toBeLessThanOrEqual(0.8)
+      expect(sound.modRelease).toBeLessThanOrEqual(0.3)
+      expect(sound.modSustain).toBeGreaterThanOrEqual(0)
+      expect(sound.modSustain).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('converts time constants into the envelope Tone actually wants', () => {
+    // Tone derives tau = ln(D+1)/ln(200) from the duration it is given, so a
+    // correct conversion is the one that comes back out as the constant we put
+    // in. This is the single seam between the library's units and Tone's; if
+    // it drifts, every envelope in the instrument is wrong at once.
+    const tauOf = (d: number) => Math.log(d + 1) / Math.log(200)
+    for (const tau of [0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 0.8]) {
+      expect(tauOf(decayFor(tau))).toBeCloseTo(tau, 6)
+    }
+    // Familiar landmarks, so a bad edit is visible rather than merely different.
+    expect(decayFor(0.05)).toBeCloseTo(0.303, 3) // a short release
+    expect(decayFor(0.7)).toBeCloseTo(39.8, 1) // a Rhodes
+    expect(decayFor(5)).toBe(120) // capped, not scheduled a century out
+  })
+
+  it('converts every preset to a decay Tone can schedule', () => {
+    for (const sound of SOUNDS) {
+      for (const tau of [sound.decay, sound.release, sound.modDecay, sound.modRelease]) {
+        if (tau === undefined) continue
+        const d = decayFor(tau)
+        expect(Number.isFinite(d)).toBe(true)
+        expect(d).toBeGreaterThan(0)
+        expect(d).toBeLessThanOrEqual(120)
+      }
+    }
+  })
+
+  it('keeps the five names Telepathic publish under Lead', () => {
+    // research/07. Their category is the one documented fact about them, and
+    // an earlier library got it wrong by building all five as plucks and pads.
+    for (const name of ['Lemon', 'DX Guitar', 'Trout', 'Plumerai La Tete', 'Cosmic Day Spa']) {
+      const sound = SOUNDS.find((s) => s.name === name)
+      expect(sound, `${name} is missing`).toBeDefined()
+      // A lead sustains and sings rather than being struck and gone.
+      expect(sound!.sustain, `${name} does not sustain`).toBeGreaterThan(0.25)
     }
   })
 

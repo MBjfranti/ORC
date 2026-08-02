@@ -7,11 +7,38 @@
  * a starting point you browse, with the filter, the effects and the performance
  * setting layered on top.
  *
- * The naming is deliberate. Telepathic's own sounds are called things like
- * `Cosmic Day Spa`, `Millionaire` and `Trout` — evocative, slightly absurd,
- * never technical. Nothing here is `FM Bell 2`. That costs nothing and is a
- * large part of why the instrument feels like an instrument rather than a
- * parameter set, so it is worth copying exactly (research/07 §Known presets).
+ * ## Where the numbers come from
+ *
+ * The waveform, envelope, harmonicity, modulation index and modulation envelope
+ * of every preset are derived from the General MIDI timbre table in
+ * **webaudio-tinysynth** by Tatsuya Shinyagaito (g200kg), used under the Apache
+ * License 2.0. Each entry names the GM program it came from, so any value here
+ * can be read back against the source table.
+ *
+ * The **cutoff, the effects and the trim are ours** — tinysynth has no filter
+ * and no effects at all. The cutoff is derived rather than picked (see below);
+ * the effects and trim are voiced by hand so every preset arrives playable
+ * without touching a knob.
+ *
+ * The conversion, worked out by reading both synths rather than by ear:
+ *
+ *  - `harmonicity` is the modulator's frequency ratio `t`. Both synths define
+ *    it the same way, so it copies straight across.
+ *  - `index` is the modulator's level `v`. In tinysynth the modulator's gain is
+ *    scaled by the carrier frequency, so peak deviation is `v × fc`; Tone
+ *    multiplies `frequency × modulationIndex` for the same node. They are the
+ *    same quantity under different names.
+ *  - `decay` and `release` are **time constants**, exactly as the source table
+ *    writes them — see the note on `Sound` below.
+ *
+ * ## Naming
+ *
+ * Telepathic's own sounds are called things like `Cosmic Day Spa`,
+ * `Millionaire` and `Trout` — evocative, slightly absurd, never technical.
+ * Nothing here is `FM Bell 2`; the names come from history, from the instrument
+ * itself, or from where it gets played. That costs nothing and is a large part
+ * of why the instrument feels like an instrument rather than a parameter set
+ * (research/07 §Known presets, research/14).
  */
 
 /** The three engines. Conventional on purpose; the library does the work. */
@@ -25,12 +52,36 @@ export interface Sound {
   /** Base filter cutoff in Hz, before the Colour dial moves it. */
   readonly cutoff: number
   readonly attack: number
+  /**
+   * Decay **time constant** in seconds, not a duration.
+   *
+   * The source table decays by exponential approach, so `decay` here is the
+   * `setTargetAtTime` time constant it uses, copied verbatim. Tone wants a
+   * duration instead and derives its own constant from it, so `synth.ts`
+   * converts once, in one place. Keeping the source's units means every number
+   * in this file can be checked against the GM table it came from — expressed
+   * in Tone's units, a Rhodes' 0.7 would read as 39.8.
+   */
   readonly decay: number
   readonly sustain: number
+  /** Release time constant, same convention as `decay`. */
   readonly release: number
   /** FM/EP only: the ratio between carrier and modulator, and how hard it hits. */
   readonly harmonicity?: number
   readonly index?: number
+  /**
+   * FM/EP only: the modulator's own envelope — where the *timbre* moves.
+   *
+   * This is what separates a struck sound from a held one. A vibraphone's
+   * modulator collapses in a few milliseconds, leaving a sine body; a brass
+   * section's holds up and keeps the tone buzzing for as long as the note does.
+   * Without it every FM preset has one fixed brightness and they all blur
+   * together, which is what the previous, invented library did.
+   */
+  readonly modAttack?: number
+  readonly modDecay?: number
+  readonly modSustain?: number
+  readonly modRelease?: number
   /** The effects the patch arrives with — a sound carries its own space. */
   readonly reverb: number
   readonly chorus: number
@@ -39,13 +90,18 @@ export interface Sound {
   readonly volume: number
 }
 
+/** `[attack, decay, sustain, release]`, decay and release as time constants. */
+type Env = [number, number, number, number]
+/** `[reverb, chorus, delay]`, each a wet level. */
+type Fx = [number, number, number]
+
 const sub = (
   name: string,
   wave: NonNullable<Sound['wave']>,
   cutoff: number,
-  env: [number, number, number, number],
-  fx: [number, number, number],
-  volume = -15,
+  env: Env,
+  fx: Fx,
+  volume: number,
 ): Sound => ({
   name,
   engine: 'sub',
@@ -61,135 +117,148 @@ const sub = (
   volume,
 })
 
-const fm = (
-  name: string,
-  harmonicity: number,
-  index: number,
-  cutoff: number,
-  env: [number, number, number, number],
-  fx: [number, number, number],
-  volume = -17,
-): Sound => ({
-  name,
-  engine: 'fm',
-  harmonicity,
-  index,
-  cutoff,
-  attack: env[0],
-  decay: env[1],
-  sustain: env[2],
-  release: env[3],
-  reverb: fx[0],
-  chorus: fx[1],
-  delay: fx[2],
-  volume,
-})
+const modulated =
+  (engine: 'fm' | 'ep') =>
+  (
+    name: string,
+    harmonicity: number,
+    index: number,
+    cutoff: number,
+    env: Env,
+    mod: Env,
+    fx: Fx,
+    volume: number,
+  ): Sound => ({
+    name,
+    engine,
+    harmonicity,
+    index,
+    cutoff,
+    attack: env[0],
+    decay: env[1],
+    sustain: env[2],
+    release: env[3],
+    modAttack: mod[0],
+    modDecay: mod[1],
+    modSustain: mod[2],
+    modRelease: mod[3],
+    reverb: fx[0],
+    chorus: fx[1],
+    delay: fx[2],
+    volume,
+  })
 
-const ep = (
-  name: string,
-  harmonicity: number,
-  index: number,
-  cutoff: number,
-  env: [number, number, number, number],
-  fx: [number, number, number],
-  volume = -14,
-): Sound => ({
-  name,
-  engine: 'ep',
-  harmonicity,
-  index,
-  cutoff,
-  attack: env[0],
-  decay: env[1],
-  sustain: env[2],
-  release: env[3],
-  reverb: fx[0],
-  chorus: fx[1],
-  delay: fx[2],
-  volume,
-})
+const fm = modulated('fm')
+
+/**
+ * A Rhodes is best synthesised as 2-operator FM, so `ep` is the same
+ * architecture as `fm` with a struck envelope. It stays a separate engine
+ * because the browse list groups by it and because switching engines has to cut
+ * sounding notes; the split is curatorial, not architectural.
+ */
+const ep = modulated('ep')
 
 /**
  * Fifty sounds, in browse order.
  *
- * Roughly grouped so turning the dial travels somewhere rather than shuffling:
- * keys and pianos first, then pads, then plucks and bells, then organs and
- * reeds, then the strange ones at the top of the list where you find them by
- * accident.
+ * Ordered so that turning the dial travels somewhere rather than shuffling:
+ * keys, then tuned percussion, organs, plucked things, strings, winds, brass,
+ * voices, leads, and pads at the far end. The comment on each line is the GM
+ * program its numbers were derived from.
  */
 export const SOUNDS: readonly Sound[] = [
   // --- keys ---------------------------------------------------------------
-  ep('Sunday Rhodes', 3.01, 11, 2600, [0.002, 1.6, 0.12, 1.8], [0.24, 0.2, 0]),
-  ep('Wurly Bird', 2.0, 8, 2200, [0.003, 1.2, 0.16, 1.4], [0.18, 0.28, 0.06]),
-  ep('Dyno Suitcase', 3.01, 14, 3400, [0.002, 2.0, 0.1, 2.2], [0.3, 0.34, 0]),
-  ep('Millionaire', 4.02, 9, 2900, [0.004, 1.4, 0.2, 1.6], [0.26, 0.16, 0.12]),
-  ep('Tine Whisper', 3.5, 5, 1800, [0.006, 2.4, 0.06, 2.6], [0.36, 0.22, 0]),
-  ep('Hotel Lobby', 2.01, 12, 2400, [0.002, 1.1, 0.22, 1.3], [0.2, 0.4, 0.08]),
+  ep("Suitcase '73", 7, 3, 8000, [0.002, 0.7, 0, 0.05], [0.001, 0.8, 1, 0.05], [0.26, 0.22, 0], -14.58), // GM 5 Electric Piano 1
+  ep('Millionaire', 7, 8, 8000, [0.002, 0.7, 0, 0.05], [0.001, 0.5, 1, 0.05], [0.22, 0.16, 0.1], -14.58), // GM 6 Electric Piano 2
+  ep('Parlour Upright', 1, 3, 1550, [0.002, 0.7, 0, 0.1], [0.01, 0.7, 0.1, 0.05], [0.2, 0.06, 0], -14), // GM 1 Acoustic Grand Piano
+  ep('Saloon Tuesday', 3, 4, 5900, [0.002, 0.7, 0, 0.05], [0.01, 0.3, 0.5, 0.05], [0.16, 0.3, 0], -17.01), // GM 4 Honky-tonk Piano
+  ep('Powdered Wig', 1, 8, 6300, [0.002, 0.8, 0.28, 0.05], [0.001, 0.8, 1, 0.3], [0.24, 0.04, 0], -14.71), // GM 7 Harpsichord
+  ep('Funk Cabinet', 1, 6, 2750, [0.002, 0.8, 0.17, 0.05], [0.001, 0.8, 0.59, 0.3], [0.12, 0.2, 0.08], -14.71), // GM 8 Clavi
 
-  // --- pads ---------------------------------------------------------------
-  sub('Meadow', 'triangle', 1100, [0.45, 0.9, 0.9, 2.2], [0.38, 0.42, 0.04], -14),
-  sub('Long Drive Home', 'fatsawtooth', 1800, [0.9, 1.6, 0.8, 3.2], [0.5, 0.44, 0.16], -18),
-  sub('Wool', 'triangle', 800, [0.7, 1.0, 0.88, 2.8], [0.34, 0.3, 0], -13),
-  sub('Glass Elevator', 'square', 2400, [0.5, 1.4, 0.75, 2.4], [0.44, 0.36, 0.2], -19),
-  sub('Slow Weather', 'pwm', 1200, [1.2, 1.8, 0.9, 3.6], [0.52, 0.48, 0.08], -17),
-  sub('Tape Choir', 'fatsawtooth', 1600, [0.8, 1.2, 0.82, 2.4], [0.46, 0.52, 0.06], -18),
-  sub('Underwater Bank', 'sine', 700, [0.55, 1.5, 0.86, 2.6], [0.4, 0.38, 0.14], -12),
-
-  // --- plucks and bells ---------------------------------------------------
-  fm('Cold Bell', 5.02, 14, 4200, [0.001, 1.8, 0.04, 2.4], [0.4, 0.08, 0.12]),
-  fm('Music Box', 7.01, 10, 5000, [0.001, 1.2, 0.02, 1.6], [0.34, 0.06, 0.1]),
-  fm('Toy Piano', 4.0, 7, 3800, [0.002, 0.6, 0.06, 0.8], [0.2, 0.12, 0]),
-  fm('Struck Copper', 2.51, 16, 3000, [0.001, 0.9, 0.05, 1.1], [0.3, 0.1, 0.16]),
-  fm('Kalimba', 6.0, 8, 4400, [0.001, 0.5, 0.03, 0.7], [0.28, 0.04, 0.08]),
-  fm('Wire Harp', 3.51, 11, 3400, [0.002, 1.4, 0.06, 1.8], [0.36, 0.14, 0.22]),
+  // --- tuned percussion ---------------------------------------------------
+  fm('Hotel Lobby', 5, 11, 8000, [0.002, 0.6, 0, 0.3], [0.001, 0.01, 0.5, 0.05], [0.3, 0.34, 0.06], -20.01), // GM 12 Vibraphone
+  fm('Wind-Up Lullaby', 5, 11, 8000, [0.002, 0.3, 0, 0.3], [0.001, 0.1, 0.4, 0.05], [0.34, 0.06, 0.12], -20.01), // GM 11 Music Box
+  fm('Rosewood Rain', 5, 6, 8000, [0.002, 0.2, 0, 0.2], [0.001, 0.02, 0, 0.05], [0.24, 0.08, 0.1], -18.25), // GM 13 Marimba
+  fm('Sugarplum', 11, 7, 8000, [0.002, 0.3, 0, 0.3], [0.001, 0.03, 0, 0.05], [0.32, 0.1, 0.14], -16.03), // GM 9 Celesta
+  fm('Porch Kalimba', 12, 22, 8000, [0.002, 0.2, 0, 0.2], [0.001, 0.1, 0, 0.1], [0.28, 0.05, 0.1], -17), // GM 109 Kalimba
+  fm('Bell Tower', 3.5, 11, 8000, [0.002, 0.8, 0.05, 0.3], [0.001, 0.8, 0.05, 0.3], [0.42, 0.08, 0.16], -20.01), // GM 15 Tubular Bells
 
   // --- organs and reeds ---------------------------------------------------
-  sub('Fifth Organ', 'square', 2600, [0.01, 0.2, 0.95, 0.3], [0.2, 0.24, 0], -16),
-  sub('Church Damp', 'sine', 1600, [0.06, 0.4, 0.92, 0.8], [0.5, 0.14, 0], -12),
-  sub('Reed Pump', 'sawtooth', 1900, [0.02, 0.3, 0.9, 0.4], [0.24, 0.3, 0.04], -16),
-  sub('Accordion Cafe', 'sawtooth', 2200, [0.03, 0.25, 0.88, 0.35], [0.18, 0.44, 0], -17),
-  sub('Cathedral Toy', 'triangle', 1400, [0.04, 0.5, 0.9, 1.2], [0.56, 0.18, 0.1], -13),
+  sub('Drawbars Out', 'sawtooth', 1550, [0.002, 0.01, 0.9, 0.05], [0.18, 0.26, 0], -17.6), // GM 17 Drawbar Organ
+  sub('Roadhouse Organ', 'sawtooth', 1550, [0.002, 0.1, 0.9, 0.05], [0.2, 0.4, 0], -18.01), // GM 19 Rock Organ
+  sub('Cold Cathedral', 'sawtooth', 1550, [0.04, 0.01, 0.9, 0.05], [0.56, 0.12, 0], -16.25), // GM 20 Church Organ
+  fm('Accordion Cafe', 3, 10.5, 8000, [0.02, 0.05, 0.8, 0.05], [0.001, 0.05, 1, 0.05], [0.18, 0.42, 0], -20.01), // GM 22 Accordion
+  fm('Boxcar Harp', 1, 2, 4700, [0.02, 0.2, 0.5, 0.05], [0.001, 0.03, 1, 0.05], [0.24, 0.3, 0.12], -20.01), // GM 23 Harmonica
 
-  // --- brass and strings --------------------------------------------------
-  sub('Paper Brass', 'sawtooth', 2400, [0.06, 0.6, 0.78, 0.6], [0.24, 0.18, 0.06], -16),
-  sub('String Section', 'fatsawtooth', 1700, [0.3, 1.0, 0.85, 1.8], [0.44, 0.4, 0], -18),
-  sub('Cheap Strings', 'sawtooth', 1500, [0.18, 0.8, 0.8, 1.2], [0.36, 0.5, 0.08], -17),
-  sub('Horn Section', 'square', 2000, [0.08, 0.5, 0.75, 0.5], [0.2, 0.16, 0], -17),
+  // --- plucked ------------------------------------------------------------
+  fm('Nylon Courtyard', 3, 5, 7050, [0.002, 0.5, 0, 0.05], [0.001, 0.8, 0.14, 0.05], [0.26, 0.08, 0], -18.25), // GM 25 Acoustic Guitar (nylon)
+  fm('Surf Motel', 3, 11, 8000, [0.002, 0.8, 0.05, 0.05], [0.001, 0.4, 0.5, 0.05], [0.3, 0.24, 0.22], -18.25), // GM 28 Electric Guitar (clean)
+  fm('Garage Door', 1, 4, 2350, [0.002, 0.8, 0.05, 0.05], [0.001, 0.8, 0.72, 0.05], [0.16, 0.12, 0.08], -17), // GM 30 Overdriven Guitar
+  fm('Raga Hour', 5, 11, 8000, [0.002, 0.5, 0, 0.3], [0.001, 0.05, 0, 0.05], [0.34, 0.1, 0.14], -18.25), // GM 105 Sitar
+  fm('Gilded Harp', 2, 7, 6300, [0.002, 0.5, 0, 0.3], [0.001, 0.8, 0.05, 0.3], [0.4, 0.14, 0.1], -18.25), // GM 47 Orchestral Harp
+
+  // --- strings ------------------------------------------------------------
+  fm('First Chair', 1, 5, 6300, [0.1, 0.8, 0.79, 0.05], [0.001, 0.8, 0.83, 0.05], [0.34, 0.16, 0], -17), // GM 41 Violin
+  fm('Bow and Rosin', 0.5, 5, 6300, [0.1, 0.8, 0.79, 0.05], [0.001, 0.8, 0.83, 0.05], [0.36, 0.12, 0], -17), // GM 43 Cello
+  fm('Tremolo Fog', 1, 6.6, 3000, [0.1, 0.8, 0.79, 0.05], [0.001, 0.05, 1, 0.05], [0.44, 0.2, 0], -17), // GM 45 Tremolo Strings
+  fm('Tiptoe Pizz', 3, 4, 5900, [0.002, 0.1, 0, 0.1], [0.001, 0.8, 0.24, 0.05], [0.28, 0.06, 0.12], -18.25), // GM 46 Pizzicato Strings
+  sub('Rented Tuxedo', 'sawtooth', 6300, [0.03, 0.01, 0.5, 0.05], [0.44, 0.38, 0], -16.25), // GM 49 String Ensemble 1
+  sub('Cheap Strings', 'sawtooth', 6300, [0.02, 0.01, 1, 0.05], [0.36, 0.5, 0.06], -18.01), // GM 51 SynthStrings 1
+
+  // --- winds --------------------------------------------------------------
+  fm('Silver Breath', 2, 4, 3900, [0.03, 0.4, 0.4, 0.05], [0.001, 0.4, 0, 0.05], [0.34, 0.14, 0.08], -14.57), // GM 74 Flute
+  fm('Fangorn Forest', 2, 7, 6300, [0.06, 0.3, 0.3, 0.05], [0.001, 0.2, 0.2, 0.05], [0.46, 0.18, 0.2], -17), // GM 76 Pan Flute
+  fm("Shepherd's Hour", 2, 1, 1550, [0.02, 0.8, 0.28, 0.05], [0.001, 0.02, 0, 0.05], [0.4, 0.1, 0.16], -14.57), // GM 80 Ocarina
+  fm('Licorice Stick', 1, 4.4, 4700, [0.05, 0.1, 0.8, 0.05], [0.001, 0.1, 1, 0.05], [0.26, 0.12, 0], -20.01), // GM 72 Clarinet
+  fm('Fagotto', 1, 7, 3150, [0.03, 0.2, 0.4, 0.05], [0.001, 0.8, 0.14, 0.05], [0.28, 0.08, 0], -18.25), // GM 71 Bassoon
+  fm('Tuning Note', 2, 5, 4700, [0.02, 0.7, 0.5, 0.05], [0.001, 0.2, 0.5, 0.05], [0.24, 0.06, 0], -17), // GM 69 Oboe
+  fm('Wandering Monk', 2, 8, 7050, [0.02, 0.8, 0.35, 0.05], [0.001, 0.5, 0, 0.05], [0.48, 0.1, 0.24], -17), // GM 78 Shakuhachi
+
+  // --- brass --------------------------------------------------------------
+  fm('Reveille', 1, 4, 4700, [0.01, 0.8, 0.62, 0.04], [0.001, 0.1, 1, 0.05], [0.22, 0.08, 0.06], -20.01), // GM 57 Trumpet
+  fm('Harmon Mute', 1, 2, 4700, [0.04, 0.01, 1, 0.05], [0.001, 0.1, 0, 0.05], [0.3, 0.1, 0.14], -21), // GM 60 Muted Trumpet
+  fm('Hunting Horn', 1, 4, 4700, [0.02, 0.8, 0.53, 0.08], [0.001, 0.1, 1, 0.05], [0.38, 0.12, 0], -20.01), // GM 61 French Horn
+  fm('Miami Exterior', 1, 4, 4700, [0.02, 0.8, 0.62, 0.08], [0.001, 0.1, 1, 0.05], [0.2, 0.24, 0.1], -20.01), // GM 62 Brass Section
+
+  // --- voices -------------------------------------------------------------
+  fm('Vaulted Choir', 5, 3, 7850, [0.03, 0.01, 1, 0.05], [0.001, 0.8, 1, 0.05], [0.5, 0.3, 0], -18.25), // GM 53 Choir Aahs
+  fm('Streetlight Ooh', 2, 1, 1550, [0.03, 0.01, 0.9, 0.05], [0.001, 0.03, 0.2, 0.05], [0.42, 0.26, 0.08], -17), // GM 54 Voice Oohs
 
   // --- leads --------------------------------------------------------------
   //
   // The five names Telepathic publish under "Lead" (research/07): Lemon, DX
-  // Guitar, Trout, Plumerai La Tete and Cosmic Day Spa. They were built here as
-  // plucks and a pad, which is the one thing about them that *is* documented
-  // and was the one thing got wrong. A lead sustains and sings — high sustain,
-  // long release, present midrange — rather than being struck and gone.
-  fm('Lemon', 2.0, 5, 3400, [0.01, 0.6, 0.78, 1.1], [0.2, 0.18, 0.22], -16),
-  fm('DX Guitar', 3.0, 7, 2900, [0.006, 0.8, 0.7, 1.0], [0.18, 0.24, 0.14], -16),
-  fm('Trout', 1.51, 9, 3100, [0.02, 0.7, 0.72, 1.2], [0.26, 0.14, 0.26], -16),
-  fm('Plumerai La Tete', 1.01, 4, 2400, [0.03, 0.9, 0.8, 1.5], [0.28, 0.3, 0.2], -15),
-  sub('Cosmic Day Spa', 'fatsawtooth', 2000, [0.12, 0.9, 0.82, 2.0], [0.44, 0.46, 0.18], -16),
-  sub('Whistle Lead', 'sine', 3200, [0.01, 0.3, 0.8, 0.5], [0.28, 0.12, 0.3], -13),
-  sub('Rubber Lead', 'square', 1800, [0.008, 0.4, 0.7, 0.4], [0.16, 0.2, 0.24], -16),
-  sub('Fifth Ghost', 'pwm', 2100, [0.02, 0.6, 0.72, 0.9], [0.32, 0.28, 0.34], -17),
-  fm('Talk Box', 2.51, 8, 2600, [0.006, 0.5, 0.6, 0.7], [0.2, 0.22, 0.28]),
+  // Guitar, Trout, Plumerai La Tete and Cosmic Day Spa. Category is the one
+  // documented fact about them, and it is the thing an earlier pass got wrong
+  // by building all five as plucks and pads. They are drawn from the GM lead
+  // programs here, so they sustain and sing by construction.
+  fm('Lemon', 1, 2, 6300, [0.002, 0.8, 0.64, 0.05], [0.001, 0.01, 0.5, 0.05], [0.2, 0.18, 0.22], -18.25), // GM 82 Lead 2 (sawtooth)
+  fm('DX Guitar', 11, 11, 8000, [0.002, 0.8, 0.53, 0.05], [0.2, 0.05, 0.3, 0.05], [0.18, 0.24, 0.16], -18.25), // GM 85 Lead 5 (charang)
+  fm('Trout', 2, 22, 8000, [0.01, 0.8, 0.49, 0.05], [0.001, 0.03, 0.2, 0.05], [0.26, 0.14, 0.26], -18.25), // GM 84 Lead 4 (chiff)
+  fm('Plumerai La Tete', 1, 7, 3150, [0.06, 0.8, 0.53, 0.05], [0.001, 0.8, 0.24, 0.05], [0.28, 0.3, 0.2], -18.25), // GM 86 Lead 6 (voice)
+  fm('Cosmic Day Spa', 2, 4, 3900, [0.05, 0.8, 0.71, 0.05], [0.001, 0.01, 0, 0.05], [0.44, 0.46, 0.18], -16.03), // GM 83 Lead 3 (calliope)
+  sub('Fifth Ghost', 'sawtooth', 6300, [0.03, 0.7, 0.3, 0.2], [0.32, 0.28, 0.34], -16.25), // GM 87 Lead 7 (fifths)
 
-  // --- basses (playable up top too) ---------------------------------------
-  sub('PBass', 'triangle', 900, [0.008, 0.4, 0.7, 0.4], [0.1, 0.06, 0], -12),
-  sub('ORC808', 'sine', 600, [0.004, 0.8, 0.2, 0.9], [0.08, 0, 0], -10),
-  sub('Rezdist', 'sawtooth', 1200, [0.006, 0.35, 0.6, 0.3], [0.12, 0.1, 0.06], -16),
-
-  // --- the strange end ----------------------------------------------------
-  fm('Broken Radio', 8.03, 18, 2400, [0.003, 0.7, 0.1, 0.9], [0.3, 0.12, 0.4]),
-  fm('Dial Tone Choir', 1.0, 2, 1800, [0.4, 1.2, 0.8, 2.0], [0.48, 0.34, 0.16]),
-  fm('Insect Radio', 11.02, 20, 5200, [0.001, 0.3, 0.02, 0.5], [0.26, 0.06, 0.44]),
-  sub('Vinyl Rest', 'pwm', 900, [1.4, 2.0, 0.9, 3.8], [0.6, 0.4, 0.2], -18),
-  fm('Detuned Postcard', 2.03, 6, 2000, [0.02, 0.9, 0.5, 1.4], [0.4, 0.56, 0.3]),
-  sub('Sleep Mode', 'sine', 500, [1.8, 2.4, 0.92, 4.0], [0.64, 0.3, 0.12], -12),
-  fm('Wrong Number', 3.97, 22, 3000, [0.002, 0.4, 0.08, 0.6], [0.22, 0.1, 0.5]),
-  sub('Gravity Well', 'fatsawtooth', 700, [1.0, 2.2, 0.88, 3.4], [0.58, 0.46, 0.24], -18),
-  ep('Ghost Rhodes', 3.01, 6, 1600, [0.004, 2.8, 0.08, 3.0], [0.62, 0.3, 0.26]),
-  sub('Last Train', 'triangle', 1000, [0.9, 1.8, 0.86, 3.0], [0.54, 0.36, 0.42], -15),
+  // --- pads ---------------------------------------------------------------
+  fm('Wool', 1, 2, 1200, [0.05, 0.8, 0.72, 0.3], [0.001, 0.3, 1, 0.05], [0.4, 0.3, 0.06], -18.25), // GM 90 Pad 2 (warm)
+  fm('Tape Choir', 4, 2, 4700, [0.08, 0.8, 0.34, 0.1], [0.08, 0.3, 0.3, 0.05], [0.46, 0.5, 0.1], -18.25), // GM 92 Pad 4 (choir)
+  fm('Slow Weather', 1, 8, 3550, [0.05, 0.8, 0.79, 0.3], [0.001, 0.8, 1, 0.05], [0.52, 0.44, 0.12], -18.25), // GM 96 Pad 8 (sweep)
 ]
+
+/**
+ * A decay or release time constant, converted into Tone's units.
+ *
+ * The library stores time constants because that is what its source table
+ * stores, and keeping them makes every preset checkable against it. Tone's
+ * exponential envelope segments take a *duration* instead and derive their own
+ * constant as `ln(D+1) / ln(200)`, so inverting that is the whole conversion.
+ *
+ * The results look alarming and are not: a Rhodes' 0.7s constant becomes a
+ * decay of 39.8, which does not mean a forty-second note. It means the level
+ * falls by 1/e every 0.7s, and the note is long gone before the segment would
+ * nominally end. Capped so a very slow tail cannot schedule automation absurdly
+ * far into the future.
+ */
+export const decayFor = (tau: number) => Math.min(Math.pow(200, tau) - 1, 120)
 
 /** `01`–`50`, the way the panel numbers them. */
 export const soundNumber = (index: number) => String(index + 1).padStart(2, '0')

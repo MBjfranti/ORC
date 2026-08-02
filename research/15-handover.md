@@ -38,8 +38,9 @@ git log --oneline
 unlock an `AudioContext`, so every browser check comes back silent. Everything
 sonic is verified by test and by reasoning only:
 
-- All fifty sounds — parameters reasoned from engine type, never auditioned.
-  Expect the FM entries at the strange end to be harsh.
+- All fifty sounds. The parameters are now *sourced* rather than invented
+  (research/14), and the conversion is verified by round-trip test — but sourced
+  is not the same as heard. Expect the brightest FM entries to want a pass.
 - The performance modes after the last round of fixes.
 - Whether Strum, Slop and Block are now audibly distinct (they were identical
   until the clock-resolution fix; that is unconfirmed by ear).
@@ -48,14 +49,14 @@ sonic is verified by test and by reasoning only:
 
 | Thing | Where |
 |---|---|
-| Long sound names clip on the 128px screen | `ScreenList`, `styles.css` |
+| Long sound names may still clip — names are now ≤16 chars but this was never *measured* against the rendered font | `ScreenList`, `styles.css` |
 | Sound encoder press/hold not built — tap = browse by name, hold = save menu | `research/07`, `13 §A.14 M1` |
 | Voicing has no home since `-`/`=` went to the encoder row; `[` is also a root key | `App.tsx` keydown |
 | Only the Sound encoder exists; the rest are hidden behind `SHOW` flags | `Console.tsx` |
 | Readouts hidden behind `SHOW_READOUTS` | `App.tsx` |
 | Perform Lock (hold to pin the mode while browsing sounds) never implemented | `research/06` |
 | Bass tracks the octave setting, not the voiced chord — gap widens at extreme voicings | `instrument.ts` |
-| Sound library needs real parameters | `research/14` |
+| ~~Sound library needs real parameters~~ — **done**, see `research/14` | `sounds.ts` |
 
 ## Two traps that cost real time
 

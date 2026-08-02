@@ -8,10 +8,14 @@ Inspired by the Telepathic Instruments Orchid ORC-1. Research corpus in [`resear
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # 71 tests
+npm test           # 88 tests
 npm run typecheck
 npm run build
 ```
+
+The fifty sounds are derived from the General MIDI timbre table in
+[webaudio-tinysynth](https://github.com/g200kg/webaudio-tinysynth) (Apache-2.0) — see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 ## Playing it
 
