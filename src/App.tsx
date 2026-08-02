@@ -14,14 +14,24 @@ import {
 } from './input/layout.js'
 import type { Legends } from './input/layout.js'
 import { usePanel } from './state/panel.js'
+import { ENCODERS } from './ui/encoders.js'
 import { ChordDisplay } from './ui/ChordDisplay.js'
-import { Controls } from './ui/Controls.js'
+import { Console } from './ui/Console.js'
 import { Keybed } from './ui/Keybed.js'
 import { Loop } from './ui/Loop.js'
 import { Pads } from './ui/Pads.js'
 import { VoicingStack } from './ui/VoicingStack.js'
 
 export type { Sounding }
+
+/**
+ * The chord readout, the pitch axis and the looper.
+ *
+ * Off while the top section is rebuilt one control at a time. They are still
+ * wired and still correct — this is a curtain, not a deletion, and each comes
+ * back as it earns its place on the panel again.
+ */
+const SHOW_READOUTS = false
 
 /**
  * The shell.
@@ -76,8 +86,9 @@ export default function App() {
     starting.current = true
     await synth.start()
     const s = usePanel.getState()
-    synth.setVoice(s.voice)
+    synth.setSound(s.soundIndex)
     synth.setCutoff(s.cutoff)
+    synth.setChorus(s.chorus)
     synth.setReverb(s.reverb)
     synth.setDelay(s.delay)
     synth.setVolume(s.volume)
@@ -87,8 +98,9 @@ export default function App() {
 
   // --- settings → engine ---------------------------------------------------
 
-  const voice = usePanel((s) => s.voice)
+  const soundIndex = usePanel((s) => s.soundIndex)
   const cutoff = usePanel((s) => s.cutoff)
+  const chorus = usePanel((s) => s.chorus)
   const reverb = usePanel((s) => s.reverb)
   const delayAmount = usePanel((s) => s.delay)
   const volume = usePanel((s) => s.volume)
@@ -96,8 +108,9 @@ export default function App() {
   const bpm = usePanel((s) => s.bpm)
   const loopGrid = usePanel((s) => s.loopGrid)
 
-  useEffect(() => void synth.setVoice(voice), [synth, voice])
+  useEffect(() => void synth.setSound(soundIndex), [synth, soundIndex])
   useEffect(() => void synth.setCutoff(cutoff), [synth, cutoff])
+  useEffect(() => void synth.setChorus(chorus), [synth, chorus])
   useEffect(() => void synth.setReverb(reverb), [synth, reverb])
   useEffect(() => void synth.setDelay(delayAmount), [synth, delayAmount])
   useEffect(() => void synth.setVolume(volume), [synth, volume])
@@ -114,10 +127,26 @@ export default function App() {
   const key = usePanel((s) => s.key)
   const performMode = usePanel((s) => s.performMode)
   const performAmount = usePanel((s) => s.performAmount)
+  const performOn = usePanel((s) => s.performOn)
 
   useEffect(() => {
     instrument.recolour()
-  }, [instrument, heldTypes, heldExtensions, voicing, octave, keyMode, key, performMode, performAmount])
+      // `bpm` belongs here: the arpeggiator and Pattern are BPM-synced, and
+    // without it a tempo change mid-chord left the loop running at the old
+    // interval until the next keypress.
+  }, [
+    instrument,
+    heldTypes,
+    heldExtensions,
+    voicing,
+    octave,
+    keyMode,
+    key,
+    performMode,
+    performAmount,
+    performOn,
+    bpm,
+  ])
 
   // --- looper --------------------------------------------------------------
 
@@ -205,11 +234,40 @@ export default function App() {
         return
       }
 
+      /*
+       * The number row reaches the encoders, and `-`/`=` turn whichever one is
+       * selected. That is the whole grammar of the top row from the keyboard:
+       * pick a knob, turn it, without your hand leaving the keys.
+       */
+      if (e.code.startsWith('Digit')) {
+        const n = Number(e.code.slice(5))
+        if (n >= 1 && n <= ENCODERS.length) {
+          e.preventDefault()
+          s.setDialFocus(n - 1)
+          // Selecting an encoder opens its list. Pressing the same number again
+          // closes it, so one key both reaches and dismisses.
+          s.setScreenList(s.screenList === n - 1 ? null : n - 1)
+          return
+        }
+        if (n === 0) {
+          e.preventDefault()
+          s.setScreenList(null)
+          return
+        }
+      }
+
       switch (e.code) {
         case 'Minus':
+        case 'Equal': {
+          e.preventDefault()
+          const encoder = ENCODERS[s.dialFocus]
+          encoder?.turn(s, e.code === 'Minus' ? -1 : 1)
+          break
+        }
+        case 'BracketLeft':
         case 'BracketRight':
           e.preventDefault()
-          s.nudgeVoicing(e.code === 'Minus' ? -1 : 1)
+          s.nudgeVoicing(e.code === 'BracketLeft' ? -1 : 1)
           break
         case 'Comma':
         case 'Period':
@@ -226,6 +284,7 @@ export default function App() {
           advanceLoop()
           break
         case 'Escape':
+          s.setScreenList(null)
           instrument.panic()
           break
       }
@@ -273,58 +332,70 @@ export default function App() {
       </header>
 
       <main className="stage">
-        <VoicingStack sounding={sounding} />
+        {/*
+          Three areas, split the way the instrument is actually held: the top
+          half is everything you read, and the bottom is the two things your
+          hands are on — pads under the left, keys under the right. That is the
+          core gesture (hold a pad, press a key) laid out as geometry.
+        */}
+        <section className="top">
+          {/*
+            Hidden while the top section is rebuilt, not removed — the chord
+            readout, the pitch axis and the looper are all still wired and come
+            back as each earns its place on the panel again.
+          */}
+          {SHOW_READOUTS && (
+            <div className="readouts">
+              <ChordDisplay sounding={sounding} />
+              <VoicingStack sounding={sounding} />
+              <Loop
+                view={loopView}
+                onAdvance={advanceLoop}
+                onUndo={() => {
+                  looper.undo()
+                  setLoopView(looper.view())
+                }}
+                onClear={() => {
+                  looper.reset()
+                  setLoopView(looper.view())
+                }}
+                onPause={() => {
+                  if (looper.view().state === 'paused') looper.resume()
+                  else looper.pause()
+                  setLoopView(looper.view())
+                }}
+              />
+            </div>
+          )}
 
-        <div className="centre">
-          <ChordDisplay sounding={sounding} />
+          <Console />
+        </section>
+
+        <section className="hand hand-left" aria-label="Chord buttons">
           <Pads legends={legends} />
+          {/* The core gesture is not discoverable from looking at it — you have
+              to know the pads are held rather than clicked. */}
+          <p className="hint">
+            <span>Hold a pad, press a key</span>
+            <span>
+              Encoders <kbd>1</kbd> · turn <kbd>-</kbd>
+              <kbd>=</kbd> · close <kbd>0</kbd> · Octave <kbd>,</kbd>
+              <kbd>.</kbd>
+            </span>
+            <span>
+              Latch <kbd>space</kbd> · Loop <kbd>B</kbd>
+            </span>
+          </p>
+        </section>
+
+        <section className="hand hand-right" aria-label="Keys">
           <Keybed
             legends={legends}
             pressed={pressed}
             onPress={onPressKey}
             onRelease={onReleaseKey}
           />
-
-          {/* The core gesture is not discoverable from looking at it — you have
-              to know the pads are held rather than clicked. One line. */}
-          <p className="hint">
-            <span>
-              Hold a pad, press a key. Voicing <kbd>-</kbd>
-              <kbd>]</kbd>
-            </span>
-            <span>
-              Octave <kbd>,</kbd>
-              <kbd>.</kbd>
-            </span>
-            <span>
-              Latch <kbd>space</kbd>
-            </span>
-            <span>
-              Loop <kbd>B</kbd>
-            </span>
-          </p>
-        </div>
-
-        <div className="side">
-          <Loop
-            view={loopView}
-            onAdvance={advanceLoop}
-            onUndo={() => {
-              looper.undo()
-              setLoopView(looper.view())
-            }}
-            onClear={() => {
-              looper.reset()
-              setLoopView(looper.view())
-            }}
-            onPause={() => {
-              if (looper.view().state === 'paused') looper.resume()
-              else looper.pause()
-              setLoopView(looper.view())
-            }}
-          />
-          <Controls />
-        </div>
+        </section>
       </main>
     </div>
   )

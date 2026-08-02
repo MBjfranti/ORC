@@ -88,3 +88,31 @@ export interface ChordSpec {
 }
 
 export const mod12 = (n: number): PitchClass => ((n % 12) + 12) % 12
+
+/**
+ * Every key, as one scrollable list.
+ *
+ * Ordered by mode rather than by tonic — all twelve majors, then all twelve
+ * minors, then the rest — because that is the order you look for one. Scrolling
+ * past `B` should land on `Cm`, not on `C Dorian`.
+ *
+ * The instrument this follows offers major and minor; the other five modes are
+ * ours, and they sit after the two everybody uses rather than interleaved.
+ */
+const KEY_MODE_ORDER: readonly Mode[] = [
+  'ionian',
+  'aeolian',
+  'dorian',
+  'mixolydian',
+  'lydian',
+  'phrygian',
+  'locrian',
+]
+
+export const KEYS: readonly Key[] = KEY_MODE_ORDER.flatMap((mode) =>
+  Array.from({ length: 12 }, (_, tonic) => ({ tonic, mode })),
+)
+
+export const sameKey = (a: Key, b: Key) => a.tonic === b.tonic && a.mode === b.mode
+
+export const keyIndex = (key: Key) => Math.max(0, KEYS.findIndex((k) => sameKey(k, key)))

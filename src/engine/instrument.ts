@@ -80,6 +80,15 @@ export class Instrument {
    */
   private heldRoots: PitchClass[] = []
   private current: Sounding | undefined
+  /**
+   * The root the player is keyed by.
+   *
+   * Not the same as the chord's root: in Key Mode a pressed black key can snap
+   * or borrow onto a different root, and the player is keyed by what was
+   * *pressed*. Keeping it separate is what stops `recolour` retuning a group
+   * that does not exist.
+   */
+  private currentRoot: PitchClass | undefined
 
   /** The snapshot React reads. Replaced only when something actually changed. */
   private view: View = EMPTY
@@ -163,17 +172,31 @@ export class Instrument {
     const s = usePanel.getState()
     const previous = this.current
 
-    this.player.stopAll()
     if (previous?.bass !== undefined) this.looper.captureOff(previous.bass, 'bass')
     this.synth.bassOff()
 
     const resolved = this.resolve(root, s, previous)
     const notes = resolved ? resolved.notes : [resolveSingleNote(root, s.octave)]
+    // The bypass wins over the dial, so an articulation can be dropped for a
+    // phrase without losing which one it was.
+    const mode = s.performOn ? s.performMode : 'off'
+    const articulation = performChord(notes, mode, { amount: s.performAmount, bpm: s.bpm })
 
-    this.player.start(root, performChord(notes, s.performMode, {
-      amount: s.performAmount,
-      bpm: s.bpm,
-    }))
+    /*
+     * A running arpeggio keeps its rhythm across a chord change. Restarting the
+     * loop on every root is what makes a progression stutter back to step one
+     * and drift off the beat — the notes should change underneath the groove,
+     * not interrupt it.
+     */
+    const moved =
+      this.currentRoot !== undefined &&
+      this.player.moveCycle(this.currentRoot, root, articulation)
+
+    if (!moved) {
+      this.player.stopAll()
+      this.player.start(root, articulation)
+    }
+    this.currentRoot = root
 
     // How long the keypress took to reach the synth. Everything after this
     // point is bookkeeping the player cannot hear.
@@ -242,10 +265,13 @@ export class Instrument {
     const held = this.current
     if (!held) return
     const s = usePanel.getState()
-    const root = held.spec.root
+    // Keyed by what was pressed, not by the chord's root — Key Mode can move
+    // the latter without moving the former.
+    const root = this.currentRoot
+    if (root === undefined) return
 
     const resolved = resolveChord({
-      root,
+      root: held.spec.root,
       types: s.heldTypes,
       extensions: s.heldExtensions,
       keyMode: s.keyMode,
@@ -256,11 +282,12 @@ export class Instrument {
     })
     if (!resolved) return
 
-    if (isCycle(s.performMode)) {
+    const mode = s.performOn ? s.performMode : 'off'
+    if (isCycle(mode)) {
       // Swap the step data under the running loop so it keeps its place.
       this.player.retune(
         root,
-        performChord(resolved.notes, s.performMode, { amount: s.performAmount, bpm: s.bpm }),
+        performChord(resolved.notes, mode, { amount: s.performAmount, bpm: s.bpm }),
       )
     } else {
       this.player.update(root, resolved.notes)
@@ -275,6 +302,7 @@ export class Instrument {
     if (this.current?.bass !== undefined) this.looper.captureOff(this.current.bass, 'bass')
     this.synth.bassOff()
     this.current = undefined
+    this.currentRoot = undefined
     this.notify()
   }
 
@@ -283,6 +311,7 @@ export class Instrument {
     this.synth.allNotesOff()
     this.heldRoots.length = 0
     this.current = undefined
+    this.currentRoot = undefined
     // The pads are held by keys that will never send their keyup once focus is
     // gone. Leaving them latched is what leaves the instrument stuck in a chord.
     usePanel.getState().clearHeld()

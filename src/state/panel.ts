@@ -15,9 +15,26 @@ import { PERFORM_MODES } from '../core/performance.js'
 import type { PerformMode } from '../core/performance.js'
 import { MODES } from '../core/types.js'
 import type { ChordType, Extension, Key, Mode, PitchClass } from '../core/types.js'
-import { VOICES } from '../engine/synth.js'
-import type { Voice } from '../engine/synth.js'
+import { SOUNDS } from '../engine/sounds.js'
 import type { ChromaticPolicy } from '../core/key.js'
+
+/**
+ * The effects rack.
+ *
+ * One is selected at a time — that is what the FX dial points at — and the
+ * encoder beside it edits whichever one that is. The others hold their value,
+ * so you build a chain up rather than being limited to one live effect.
+ */
+export type FxId = 'colour' | 'chorus' | 'delay' | 'reverb'
+
+export const FX_IDS: readonly FxId[] = ['colour', 'chorus', 'delay', 'reverb']
+
+export const FX_LABEL: Record<FxId, string> = {
+  colour: 'Colour',
+  chorus: 'Chorus',
+  delay: 'Delay',
+  reverb: 'Reverb',
+}
 
 /** Where the keybed sends out-of-key roots. */
 export type RootMode = 'chromatic' | 'scale'
@@ -43,11 +60,24 @@ export interface PanelState {
   // --- articulation ---
   performMode: PerformMode
   performAmount: number
+  /**
+   * The Perform section's on/off, separate from the `off` position on the dial.
+   *
+   * A bypass rather than a mode: switching it off drops back to block chords
+   * without losing which mode you had dialled in, so you can drop the
+   * articulation for a phrase and bring the same one back. The dial's own `off`
+   * is for when you want the pointer to say so.
+   */
+  performOn: boolean
   bpm: number
 
   // --- sound ---
-  voice: Voice
+  /** Index into the fifty-strong library. */
+  soundIndex: number
+  /** Which effect the FX dial is pointing at; the encoder edits this one. */
+  fx: FxId
   cutoff: number
+  chorus: number
   reverb: number
   delay: number
   volume: number
@@ -58,6 +88,23 @@ export interface PanelState {
   /** Length of the next recording. `null` records until you stop it. */
   loopBars: number | null
   loopGrid: Grid
+
+  /**
+   * Which encoder the number row is addressing.
+   *
+   * The digits pick a knob and `-`/`=` turn it, which is how you reach the top
+   * row without letting go of the keyboard — the whole point of numbering them
+   * on the panel.
+   */
+  dialFocus: number
+  /**
+   * Which encoder's list the screen is showing, or `null` for the resting
+   * display.
+   *
+   * Selecting an encoder opens its list — that is what the number keys are
+   * for, and it is why the panel prints the number under each knob.
+   */
+  screenList: number | null
 
   /** Held chords keep sounding after the hands leave. */
   latched: boolean
@@ -82,11 +129,17 @@ export interface PanelState {
   setPerformMode: (mode: PerformMode) => void
   cyclePerformMode: (delta: number) => void
   setPerformAmount: (amount: number) => void
+  togglePerform: () => void
   setBpm: (bpm: number) => void
 
-  setVoice: (voice: Voice) => void
-  cycleVoice: (delta: number) => void
+  setSound: (index: number) => void
+  cycleSound: (delta: number) => void
+  setFx: (fx: FxId) => void
+  cycleFx: (delta: number) => void
+  /** Set whichever effect the dial is currently pointing at. */
+  nudgeFxAmount: (delta: number) => void
   setCutoff: (n: number) => void
+  setChorus: (n: number) => void
   setReverb: (n: number) => void
   setDelay: (n: number) => void
   setVolume: (n: number) => void
@@ -95,6 +148,8 @@ export interface PanelState {
   cycleLoopBars: (delta: number) => void
   setLoopGrid: (grid: Grid) => void
   toggleLatch: () => void
+  setDialFocus: (index: number) => void
+  setScreenList: (index: number | null) => void
 }
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
@@ -118,10 +173,13 @@ export const usePanel = create<PanelState>((set) => ({
 
   performMode: 'off',
   performAmount: 0.35,
+  performOn: true,
   bpm: 96,
 
-  voice: 'warm',
+  soundIndex: 0,
+  fx: 'reverb',
   cutoff: 0.5,
+  chorus: 0.2,
   reverb: 0.22,
   delay: 0,
   volume: 0.75,
@@ -131,6 +189,8 @@ export const usePanel = create<PanelState>((set) => ({
   loopBars: 4,
   loopGrid: 'off',
 
+  dialFocus: 0,
+  screenList: null,
   latched: false,
 
   setHeldType: (type, held) =>
@@ -184,14 +244,32 @@ export const usePanel = create<PanelState>((set) => ({
       ] as PerformMode,
     })),
   setPerformAmount: (amount) => set({ performAmount: clamp01(amount) }),
+  togglePerform: () => set((s) => ({ performOn: !s.performOn })),
   setBpm: (bpm) => set({ bpm: Math.max(40, Math.min(220, Math.round(bpm))) }),
 
-  setVoice: (voice) => set({ voice }),
-  cycleVoice: (delta) =>
-    set((s) => ({
-      voice: VOICES[clampIndex(VOICES.length, VOICES.indexOf(s.voice), delta)] as Voice,
-    })),
+  setSound: (soundIndex) =>
+    set({ soundIndex: Math.max(0, Math.min(SOUNDS.length - 1, soundIndex)) }),
+  cycleSound: (delta) =>
+    set((s) => ({ soundIndex: clampIndex(SOUNDS.length, s.soundIndex, delta) })),
+  setFx: (fx) => set({ fx }),
+  cycleFx: (delta) =>
+    set((s) => ({ fx: FX_IDS[clampIndex(FX_IDS.length, FX_IDS.indexOf(s.fx), delta)] as FxId })),
+  nudgeFxAmount: (delta) =>
+    set((s) => {
+      const step = delta * 0.02
+      switch (s.fx) {
+        case 'colour':
+          return { cutoff: clamp01(s.cutoff + step) }
+        case 'chorus':
+          return { chorus: clamp01(s.chorus + step) }
+        case 'delay':
+          return { delay: clamp01(s.delay + step) }
+        default:
+          return { reverb: clamp01(s.reverb + step) }
+      }
+    }),
   setCutoff: (n) => set({ cutoff: clamp01(n) }),
+  setChorus: (n) => set({ chorus: clamp01(n) }),
   setReverb: (n) => set({ reverb: clamp01(n) }),
   setDelay: (n) => set({ delay: clamp01(n) }),
   setVolume: (n) => set({ volume: clamp01(n) }),
@@ -205,6 +283,8 @@ export const usePanel = create<PanelState>((set) => ({
   setLoopGrid: (loopGrid) => set({ loopGrid }),
   setBassLevel: (n) => set({ bassLevel: clamp01(n) }),
   toggleLatch: () => set((s) => ({ latched: !s.latched })),
+  setDialFocus: (dialFocus) => set({ dialFocus }),
+  setScreenList: (screenList) => set({ screenList }),
 }))
 
 /** Which pitch class each physical key plays, given the current layout. */

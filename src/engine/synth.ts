@@ -24,6 +24,8 @@
 import * as Tone from 'tone'
 
 import type { MidiNote } from '../core/types.js'
+import { soundAt } from './sounds.js'
+import type { Sound } from './sounds.js'
 
 const midiToFreq = (note: MidiNote) => 440 * Math.pow(2, (note - 69) / 12)
 
@@ -34,19 +36,21 @@ interface Pending {
   seq: number
 }
 
-export type Voice = 'warm' | 'glass' | 'reed'
+/**
+ * The three engines the library is built on.
+ *
+ * Deliberately few and conventional — the character lives in the fifty presets,
+ * not in exotic synthesis. This is how the instrument itself is arranged.
+ */
+export type Voice = 'sub' | 'fm' | 'ep'
 
-export const VOICES: readonly Voice[] = ['warm', 'glass', 'reed']
-
-export const VOICE_LABEL: Record<Voice, string> = {
-  warm: 'Warm',
-  glass: 'Glass',
-  reed: 'Reed',
-}
+export const VOICES: readonly Voice[] = ['sub', 'fm', 'ep']
 
 class Synth {
   private voices = new Map<Voice, Tone.PolySynth>()
-  private active: Voice = 'warm'
+  private active: Voice = 'sub'
+  /** Base cutoff of the loaded preset; the Colour dial scales around it. */
+  private baseCutoff = 2200
 
   private filter!: Tone.Filter
   private chorus!: Tone.Chorus
@@ -68,6 +72,7 @@ class Synth {
   private pendingOff = new Map<MidiNote, Pending[]>()
   private pendingBass: Pending[] = []
   private seq = 0
+  private cutoff = 0.5
 
   get running(): boolean {
     return this.started
@@ -94,9 +99,22 @@ class Synth {
         new Tone.Context({
           latencyHint: 0.003 as unknown as AudioContextLatencyCategory,
           lookAhead: 0.01,
+          // How often Tone advances its own clock, and so the resolution of
+          // every timer built on it. The default is 50ms, which is *coarser
+          // than a strum*: a 24ms gap and a 48ms gap between notes both land
+          // on the same tick, so Strum, Slop and Block come out identical.
+          // The entire difference between those modes lives below the default.
+          updateInterval: 0.005,
         }),
       )
       this.build()
+
+      // Start the clock *before* awaiting anything. A transport on a suspended
+      // context simply waits, and putting it after the reverb meant a slow or
+      // stalled impulse render left the clock stopped — which is silent, and
+      // shows up only as arpeggios that never advance past their first note.
+      Tone.getTransport().start()
+
       // The impulse response is generated asynchronously; waiting here means the
       // cost is paid during load rather than under the first chord.
       await this.reverb.ready
@@ -182,7 +200,7 @@ class Synth {
     )
 
     this.voices.set(
-      'warm',
+      'sub',
       new Tone.PolySynth(Tone.Synth, {
         oscillator: { type: 'sawtooth' },
         envelope: { attack: 0.008, decay: 0.3, sustain: 0.7, release: 1.3 },
@@ -192,7 +210,7 @@ class Synth {
     )
 
     this.voices.set(
-      'glass',
+      'fm',
       new Tone.PolySynth(Tone.FMSynth, {
         harmonicity: 2,
         modulationIndex: 5,
@@ -209,7 +227,7 @@ class Synth {
     // over a sine body — so this is the same architecture with different
     // numbers rather than a third engine.
     this.voices.set(
-      'reed',
+      'ep',
       new Tone.PolySynth(Tone.FMSynth, {
         harmonicity: 3.01,
         modulationIndex: 11,
@@ -388,11 +406,53 @@ class Synth {
     }
   }
 
-  setVoice(voice: Voice): void {
-    if (!this.started || voice === this.active) return
-    // Switching synths would strand every note attacked on the old one.
-    this.allNotesOff()
-    this.active = voice
+  /**
+   * Load a preset.
+   *
+   * A sound is a *starting point*, not a patch you edit: it sets the engine and
+   * its envelope, and the Colour dial and the effects then move around it. That
+   * is why the cutoff is remembered as a base rather than written straight to
+   * the filter — turning Colour has to mean the same thing on every preset.
+   */
+  setSound(index: number): void {
+    if (!this.started) return
+    const sound = soundAt(index)
+
+    if (sound.engine !== this.active) {
+      // Switching engines would strand every note attacked on the old one.
+      this.allNotesOff()
+      this.active = sound.engine
+    }
+
+    this.apply(sound)
+    this.baseCutoff = sound.cutoff
+    this.setCutoff(this.cutoff)
+  }
+
+  private apply(sound: Sound): void {
+    const synth = this.voices.get(sound.engine)
+    if (!synth) return
+
+    const envelope = {
+      attack: sound.attack,
+      decay: sound.decay,
+      sustain: sound.sustain,
+      release: sound.release,
+    }
+
+    if (sound.engine === 'sub') {
+      synth.set({ oscillator: { type: sound.wave ?? 'sawtooth' }, envelope, volume: sound.volume })
+    } else {
+      // The map is typed to the subtractive synth's options, so the FM fields
+      // need a cast — both engines are PolySynths, but of different voices.
+      synth.set({
+        harmonicity: sound.harmonicity ?? 3,
+        modulationIndex: sound.index ?? 10,
+        envelope,
+        volume: sound.volume,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any)
+    }
   }
 
   setBpm(bpm: number): void {
@@ -407,9 +467,15 @@ class Synth {
    */
   setCutoff(normalised: number): void {
     if (!this.started) return
-    const n = Math.max(0, Math.min(1, normalised))
-    const hz = Math.max(80, Math.min(16000, 2200 * Math.pow(2, (n - 0.5) * 7)))
+    this.cutoff = Math.max(0, Math.min(1, normalised))
+    // Centred on the preset's own voice, so 0.5 is always "as designed" and
+    // there is always a way back to how the sound started.
+    const hz = Math.max(80, Math.min(16000, this.baseCutoff * Math.pow(2, (this.cutoff - 0.5) * 7)))
     this.filter.frequency.rampTo(hz, 0.03)
+  }
+
+  setChorus(wet: number): void {
+    if (this.started) this.chorus.wet.rampTo(clamp01(wet), 0.08)
   }
 
   setReverb(wet: number): void {

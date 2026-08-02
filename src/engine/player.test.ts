@@ -43,9 +43,12 @@ class FakeLoop {
   }
 }
 
+/** The transport a cycle rides. Starts stopped, so the guard is exercised. */
+const transport = { seconds: 0, state: 'stopped', start() { this.state = 'started'; return this } }
+
 vi.mock('tone', () => ({
   immediate: () => 0,
-  getTransport: () => ({ seconds: 0 }),
+  getTransport: () => transport,
   Loop: FakeLoop,
 }))
 
@@ -87,13 +90,23 @@ const strum: OneShot = {
   ],
 }
 
-const arp: Cycle = { kind: 'cycle', steps: [60, 64, 67], stepSeconds: 0.25, gate: 0.8 }
+const arp: Cycle = {
+  kind: 'cycle',
+  steps: [60, 64, 67],
+  stepSeconds: 0.25,
+  gate: 0.8,
+  sustain: true,
+}
+
+/** A figure that rings and clears, the way Pattern and Harp do. */
+const figure: Cycle = { ...arp, sustain: false }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const player = (f: ReturnType<typeof fakeSynth>) => new Player(f.synth as any)
 
 beforeEach(() => {
   loops.length = 0
+  transport.state = 'stopped'
 })
 
 describe('one-shot chords', () => {
@@ -133,19 +146,56 @@ describe('one-shot chords', () => {
 })
 
 describe('arpeggios', () => {
-  it('stops the ringing step and withdraws its booked release', () => {
+  it('sounds its first step immediately, not after one interval', () => {
+    // `Tone.Loop` fires at the *end* of an interval, so waiting for it gave a
+    // full step of silence on every chord. The key has to make a sound when
+    // you press it.
+    const f = fakeSynth()
+    player(f).start(0, arp)
+    expect(f.on.map((e) => e.note)).toEqual([60])
+  })
+
+  it('hands off to the loop at the second step, keeping the rhythm even', () => {
+    const f = fakeSynth()
+    player(f).start(0, arp)
+    // The loop is armed one interval out, so it does not double-strike step one.
+    loops[0]!.callback(0.25)
+    expect(f.on.map((e) => e.note)).toEqual([60, 64])
+  })
+
+  it('builds the chord up rather than replacing it', () => {
+    // The point of a performance mode is to colour the chord, not to stand in
+    // for it. Releasing each step left one note sounding at a time, so the
+    // harmony — and any extensions on it — simply vanished.
     const f = fakeSynth()
     const p = player(f)
 
     p.start(0, arp)
-    loops[0]!.callback(0)
-    expect(f.on.map((e) => e.note)).toEqual([60])
+    loops[0]!.callback(0.25)
+    loops[0]!.callback(0.5)
+    expect(f.on.map((e) => e.note)).toEqual([60, 64, 67])
+    // Nothing released on the way: all three are still sounding.
+    expect(f.off).toEqual([])
+  })
 
+  it('clears the chord when the sequence wraps, so the pattern stays audible', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, arp)
+    loops[0]!.callback(0.25)
+    loops[0]!.callback(0.5)
+    f.off.length = 0
+    // Wrapping back to step one starts the build again.
+    loops[0]!.callback(0.75)
+    expect(f.off.sort((a, b) => a - b)).toEqual([60, 64, 67])
+  })
+
+  it('releases everything it built when the key goes up', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, arp)
+    loops[0]!.callback(0.25)
     p.stop(0)
-
-    // That release would otherwise land 200ms later, on top of whatever chord
-    // is playing by then.
-    expect(f.cancelled).toEqual([60])
     expect(f.hanging()).toEqual([])
     expect(loops[0]!.disposed).toBe(true)
   })
@@ -154,7 +204,7 @@ describe('arpeggios', () => {
     const f = fakeSynth()
     const p = player(f)
     p.start(0, arp)
-    for (let i = 0; i < 7; i++) loops[0]!.callback(i * 0.25)
+    for (let i = 1; i < 8; i++) loops[0]!.callback(i * 0.25)
     p.stop(0)
     expect(f.hanging()).toEqual([])
   })
@@ -162,8 +212,7 @@ describe('arpeggios', () => {
   it('retunes in place, keeping its position and phase', () => {
     const f = fakeSynth()
     const p = player(f)
-    p.start(0, arp)
-    loops[0]!.callback(0)
+    p.start(0, arp) // step 0 sounds here
 
     p.retune(0, { ...arp, steps: [60, 64, 67, 71] })
 
@@ -179,7 +228,6 @@ describe('arpeggios', () => {
     const f = fakeSynth()
     const p = player(f)
     p.start(0, arp)
-    loops[0]!.callback(0)
 
     p.retune(0, strum)
 
@@ -189,13 +237,106 @@ describe('arpeggios', () => {
   })
 })
 
+describe('cycles that ring and clear', () => {
+  it('releases each step instead of piling notes up', () => {
+    // Pattern and Harp are figures, not chords being assembled. Sixteen
+    // sustaining notes is mud, and after one pass the rhythm is inaudible.
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, figure)
+    loops[0]!.callback(0.25)
+    loops[0]!.callback(0.5)
+    expect(f.on.map((e) => e.note)).toEqual([60, 64, 67])
+    expect(f.off.sort((a, b) => a - b)).toEqual([60, 64, 67])
+  })
+
+  it('leaves nothing hanging when the key goes up mid-figure', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, figure)
+    loops[0]!.callback(0.25)
+    p.stop(0)
+    expect(f.hanging()).toEqual([])
+  })
+})
+
+describe('moving a cycle between roots', () => {
+  it('keeps the loop, its position and its phase', () => {
+    const f = fakeSynth()
+    const p = player(f)
+
+    p.start(0, arp) // step 0
+    loops[0]!.callback(0.25) // step 1
+    expect(f.on.map((e) => e.note)).toEqual([60, 64])
+
+    // Change chord. The arpeggio must not restart — a rhythm that resets on
+    // every root is not a rhythm.
+    const moved = p.moveCycle(0, 5, { ...arp, steps: [65, 69, 72] })
+    expect(moved).toBe(true)
+    expect(loops).toHaveLength(1)
+    expect(loops[0]!.disposed).toBe(false)
+
+    // Picks up at step 2 of the new chord, not step 0.
+    loops[0]!.callback(0.5)
+    expect(f.on.map((e) => e.note)).toEqual([60, 64, 72])
+  })
+
+  it('re-keys the group, so the new root is what stops it', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, arp)
+    p.moveCycle(0, 5, arp)
+
+    p.stop(0)
+    expect(p.size).toBe(1)
+    p.stop(5)
+    expect(p.size).toBe(0)
+    expect(f.hanging()).toEqual([])
+  })
+
+  it('adopts a new tempo without rebuilding the loop', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, arp)
+    p.moveCycle(0, 0, { ...arp, stepSeconds: 0.125 })
+    expect(loops[0]!.interval).toBe(0.125)
+    expect(loops).toHaveLength(1)
+  })
+
+  it('refuses when there is no cycle to move', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, strum)
+    // A one-shot has no loop, so there is no groove to preserve.
+    expect(p.moveCycle(0, 5, arp)).toBe(false)
+  })
+
+  it('refuses to move a cycle into a one-shot', () => {
+    const f = fakeSynth()
+    const p = player(f)
+    p.start(0, arp)
+    expect(p.moveCycle(0, 5, strum)).toBe(false)
+  })
+})
+
+describe('the transport', () => {
+  it('is started before a cycle is armed', () => {
+    // A Tone.Loop on a stopped transport never ticks, so the only thing that
+    // sounds is the immediate first step — a root pulsing once per keypress,
+    // with no error anywhere to say why.
+    const f = fakeSynth()
+    expect(transport.state).toBe('stopped')
+    player(f).start(0, arp)
+    expect(transport.state).toBe('started')
+  })
+})
+
 describe('stopAll', () => {
   it('clears every root, whichever family each was playing', () => {
     const f = fakeSynth()
     const p = player(f)
     p.start(0, strum)
     p.start(7, arp)
-    loops[0]!.callback(0)
 
     p.stopAll()
 

@@ -35,6 +35,9 @@
   /* Rust: from outside the key. Used sparingly and never decoratively. */
   --outside: #a8451c;
 
+  /* The hardware's knob cap. */
+  --cap-amber: #f3c218;
+
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --label: 'Saira Semi Condensed', system-ui, sans-serif;
 
@@ -68,14 +71,14 @@ body {
 }
 
 .app {
-  min-height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   padding: var(--gap);
-  gap: var(--gap);
+  gap: 0.7rem;
   max-width: 1240px;
   margin-inline: auto;
+  overflow: hidden;
 }
 
 /* --- masthead -------------------------------------------------------------- */
@@ -111,22 +114,100 @@ body {
   color: var(--ink-soft);
 }
 
-/* --- stage ----------------------------------------------------------------- */
+/* --- stage ----------------------------------------------------------------
+ *
+ * Three areas, split the way the instrument is held: everything you *read*
+ * across the top, and the two things your hands are on below it — the eight
+ * chord buttons under the left hand, the twelve keys under the right. The core
+ * gesture is "hold a pad, press a key", so that gesture is the layout.
+ */
 
 .stage {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 8.5rem minmax(0, 1fr) 15rem;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  /* One third to what you read, two thirds to what you play. The hands need
+     the room far more than the readouts do. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
+  grid-template-areas:
+    'top  top'
+    'left right';
   gap: var(--gap);
-  /* Stretch, not start: the controls column is the tallest, and leaving the
-     keybed floating at the top of a half-empty column read as unfinished. */
-  align-items: stretch;
 }
 
-.centre {
+.top {
+  grid-area: top;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  gap: 1.1rem;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.readouts {
+  display: flex;
+  gap: 1.1rem;
+  align-items: stretch;
+  flex: none;
+}
+
+.readouts .readout {
+  width: 8.5rem;
+  flex: none;
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  min-height: 0;
+}
+
+.readouts .stack {
+  width: 6rem;
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The console takes whatever is left and wraps into it. */
+.console {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  /* The summary sits centred in the section; units flow outward from it, so
+     Sound lands hard left without the screen drifting off-centre. */
+  justify-content: center;
+  gap: 0;
+}
+
+/* Everything left of the summary is pushed to the far edge. */
+.console > .unit:first-child {
+  margin-right: auto;
+}
+
+.console > .screen-stat {
+  margin-inline: 1.2rem;
+}
+
+.hand {
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
+  gap: 0.7rem;
   min-width: 0;
+}
+
+.hand-left {
+  grid-area: left;
+  min-height: 0;
+}
+
+.hand-right {
+  grid-area: right;
+  min-height: 0;
 }
 
 /* --- the voicing stack (the signature) ------------------------------------- */
@@ -237,11 +318,11 @@ body {
   display: flex;
   align-items: baseline;
   gap: 0.9rem;
-  min-height: clamp(3.2rem, 8vw, 4.8rem);
+  min-height: 0;
 }
 
 .readout-chord {
-  font-size: clamp(2.8rem, 7.5vw, 4.6rem);
+  font-size: clamp(2rem, 4.4vw, 3.2rem);
   font-weight: 400;
   line-height: 1;
   letter-spacing: -0.02em;
@@ -294,32 +375,45 @@ body {
 
 /* --- pads ------------------------------------------------------------------ */
 
+/* Square pads, centred in whatever room the left hand's area gives them.
+   `aspect-ratio` on the pad itself plus `justify-content` on the row is what
+   keeps them square *and* together as the column resizes — stretching them to
+   fill made them read as panels rather than as buttons. */
 .pads {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
+.pads {
+  flex: 1;
+  min-height: 0;
 }
 
 .pad-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.4rem;
-  max-width: 26rem;
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
 }
 
 .pad {
   appearance: none;
+  aspect-ratio: 1;
+  flex: 0 1 auto;
+  width: min(6.5rem, calc((100% - 1.8rem) / 4));
   border: 1px solid var(--rule-strong);
   border-radius: 3px;
   background: transparent;
   color: var(--ink);
   font-family: var(--mono);
   font-size: 0.9rem;
-  padding: 0.55rem 0.3rem 0.35rem;
+  padding: 0.5rem 0.3rem;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  justify-content: center;
+  gap: 0.25rem;
   cursor: pointer;
   transition:
     background-color 60ms linear,
@@ -366,7 +460,7 @@ body {
   min-height: clamp(140px, 20vh, 190px);
   /* Filling the whole column made the keys taller than they are wide, which
      reads as a chart rather than a keyboard. Proportion beats filling space. */
-  max-height: 220px;
+  max-height: none;
   user-select: none;
 }
 
@@ -753,10 +847,9 @@ body {
 
 .loop {
   display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  padding-bottom: 0.9rem;
-  border-bottom: 1px solid var(--rule);
+  gap: 0.6rem;
+  align-items: center;
+  flex: none;
 }
 
 /* The one button that does the next sensible thing. Sized to be hit without
@@ -821,7 +914,7 @@ body {
 }
 
 .loop-side {
-  flex: 1;
+  width: 7rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -857,4 +950,510 @@ body {
 .loop-actions button:hover {
   border-color: var(--sound);
   color: var(--sound);
+}
+
+
+/* --- the console ----------------------------------------------------------
+ *
+ * All the sound conditioning in one strip. Banked by what each group changes,
+ * so the eye can jump to "tone" without reading every label.
+ */
+
+.console {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.2rem;
+  align-items: flex-start;
+}
+
+
+.dial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 3.2rem;
+  gap: 0.1rem;
+}
+
+.dial-knob {
+  width: 2.5rem;
+  height: 2.5rem;
+  cursor: ns-resize;
+  touch-action: none;
+  border-radius: 50%;
+}
+
+.dial-knob svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+
+.dial-track {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+}
+
+.dial-arc {
+  fill: none;
+  stroke: var(--sound);
+  stroke-width: 2;
+  /* Butt caps: a round cap on a value arc overhangs the value it reports. */
+  stroke-linecap: butt;
+}
+
+.dial-pointer {
+  stroke: var(--ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* A lit ring means the thing this dial governs is currently on — the dial's
+   press, not its turn. */
+.dial[data-active='true'] .dial-pointer {
+  stroke: var(--sound);
+}
+
+.dial[data-active='true'] .dial-knob {
+  box-shadow: 0 0 0 1px var(--sound);
+}
+
+.dial-label {
+  font-family: var(--label);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  margin-top: 0.15rem;
+}
+
+.dial-readout {
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: center;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dial-knob:focus-visible {
+  outline: 2px solid var(--sound);
+  outline-offset: 2px;
+}
+
+/* The hint sits under the pads now, where the gesture it describes happens. */
+.hand-left .hint {
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.7rem;
+}
+
+@media (max-width: 900px) {
+  .stage {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'top' 'left' 'right';
+  }
+
+  .readouts {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* --- console: units -------------------------------------------------------- */
+
+.console {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 1.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.unit-title {
+  font-family: var(--label);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 0.4rem;
+}
+
+.unit-body {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dial[data-bare='true'] {
+  width: auto;
+}
+
+/* --- the lit screens -------------------------------------------------------
+ *
+ * The only dark surfaces on the page. Against paper that is enough to read as
+ * lit — no glow, no bevel, no scanlines. Tabular figures so nothing shifts as
+ * a value counts.
+ */
+
+/*
+ * The display, as measured.
+ *
+ * research/13-menu-system-spec.md §C establishes what the ORC-1's screen
+ * actually is, from framebuffer dumps embedded in the manual: **128 × 128
+ * logical pixels, square, 1-bit**. Not a metaphor — every illustration is
+ * 640×640 containing only #000 and #fff with every feature boundary on a
+ * multiple of 5.
+ *
+ * So: exactly two colours, no greys, no gradients, no rounded corners, one
+ * hairline weight, mixed case, no letterspacing. Anything softer is a web page
+ * wearing a costume.
+ *
+ * `--px` is one of those logical pixels. Nothing in here may be expressed in
+ * rem — the point is that the layout lands on the same integer grid the
+ * hardware uses.
+ */
+.screen {
+  /* One logical pixel of the panel's 128-wide grid. Derived from an explicit
+     length: a percentage here would resolve against the parent *font-size*,
+     not the width, which silently renders the whole screen sub-pixel. */
+  --screen: clamp(190px, 25vh, 240px);
+  --px: calc(var(--screen) / 128);
+  background: #000;
+  color: #fff;
+  /* §C.7: no border-radius. A 1-bit panel has no anti-aliased corner to make
+     one out of. */
+  border-radius: 0;
+  padding: calc(var(--px) * 4);
+  font-family: var(--label);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1;
+  user-select: none;
+  /* §C.7, inferred: the panel is an OLED, so a faint bloom around lit pixels is
+     honest — but it must be *additive light* around white, never a grey fill. */
+  text-shadow: 0 0 calc(var(--px) * 2) #ffffff5c;
+}
+
+.screen p {
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+/* Sound: three lines of list, the middle one lit. */
+.screen-list {
+  font-size: 0.68rem;
+  min-width: 8.4rem;
+}
+
+.screen-list p {
+  opacity: 0.45;
+}
+
+.screen-list p[data-on='true'] {
+  opacity: 1;
+  color: #9fb4ff;
+}
+
+.list-number {
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* One value, for an encoder you are watching while you turn it. */
+.screen-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 3.6rem;
+  padding: 0.25rem 0.45rem;
+}
+
+.value-main {
+  font-size: 1.05rem;
+  line-height: 1.1;
+}
+
+.value-caption {
+  font-family: var(--label);
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  text-transform: lowercase;
+}
+
+/* The summary: seven lines, two columns. The screen you glance at, as opposed
+   to the small ones you watch. */
+/*
+ * Square, because the panel is.
+ *
+ * Seven rows is ours — the hardware shows five at a 24px pitch — so the rows
+ * are scaled to fit rather than the frame being stretched to hold them. The
+ * squareness is the defining property and the thing worth keeping.
+ */
+.screen-stat {
+  aspect-ratio: 1;
+  width: var(--screen);
+  flex: none;
+  display: flex;
+  gap: calc(var(--px) * 6);
+  /* 7 rows across 128px is an 18px pitch; ~9px cap height sits inside it the
+     way the measured 11px sits inside 24px. */
+  font-size: calc(var(--px) * 12);
+}
+
+.stat-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+}
+
+.stat-col p {
+  justify-content: space-between;
+  gap: calc(var(--px) * 4);
+}
+
+/*
+ * Label and value are told apart by *position*, not by colour or weight.
+ *
+ * They were a dimmed uppercase key against a blue value — three things the
+ * panel cannot do: a grey, a second hue, and letterspaced caps. §C.6 is
+ * explicit that the display is mixed case and unletterspaced, and §C.7 that
+ * there are two colours and nothing between them.
+ */
+.stat-key,
+.stat-value {
+  color: #fff;
+  opacity: 1;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.stat-value {
+  text-align: right;
+}
+
+/* --- the labelled dial -----------------------------------------------------
+ *
+ * Legends printed around the knob, so its whole range is readable without
+ * turning it. That is what separates it from an encoder, which has no printed
+ * range because it has none.
+ */
+
+.labelled {
+  position: relative;
+  width: 7.4rem;
+  height: 5.4rem;
+  display: grid;
+  place-items: center;
+}
+
+.labelled-ring {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.labelled-legend {
+  position: absolute;
+  font-family: var(--label);
+  font-size: 0.54rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  transform-origin: center;
+}
+
+.labelled-legend[data-on='true'] {
+  color: var(--sound);
+  font-weight: 600;
+}
+
+/* An on/off, now that a click on a dial steps its value instead. */
+.switch {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: none;
+  background: transparent;
+  font-family: var(--label);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+  padding: 0;
+  cursor: pointer;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.switch-dot {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  flex: none;
+}
+
+.switch[data-on='true'] {
+  color: var(--ink);
+}
+
+.switch[data-on='true'] .switch-dot {
+  background: var(--sound);
+  border-color: var(--sound);
+}
+
+/* A dial you can click reads as clickable. */
+.dial-knob {
+  cursor: pointer;
+}
+
+/* A section's bypass lamp, sitting under the dial it governs. */
+.stackpair {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.lamp {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+}
+
+.lamp[data-on='true'] {
+  background: var(--sound);
+  border-color: var(--sound);
+  /* Lit, not merely filled — the one place a glow is honest. */
+  box-shadow: 0 0 4px var(--sound);
+}
+
+
+/* --- the encoder ----------------------------------------------------------
+ *
+ * The hardware's knob: a black body with a yellow cap, and a pointer cut into
+ * the cap rather than drawn on top of it. The number under each one is the key
+ * that reaches it, so the legend prints both.
+ */
+
+.encoder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.dial[data-cap='amber'] .dial-body {
+  fill: #17181a;
+}
+
+.dial[data-cap='amber'] .dial-cap {
+  fill: var(--cap-amber, #f3c218);
+}
+
+/* Cut into the cap, so it reads as moulded rather than printed on. */
+.dial[data-cap='amber'] .dial-pointer {
+  stroke: #17181a;
+  stroke-width: 2.4;
+}
+
+/* The track and value arc sit outside the body. */
+.dial[data-cap='amber'] .dial-track {
+  stroke: var(--rule-strong);
+}
+
+.encoder-legend {
+  font-family: var(--label);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* Selected by the number row. Shown on the cap, where the eye already is. */
+.encoder[data-focus='true'] .dial-cap {
+  stroke: var(--sound);
+  stroke-width: 2;
+}
+
+.encoder[data-focus='true'] .encoder-legend {
+  color: var(--ink);
+}
+
+/* --- the list --------------------------------------------------------------
+ *
+ * research/13 §C.1, measured: five rows at a 24px pitch on a 128px panel, 4px
+ * text margins, 11px cap height, and the selected row a full-bleed inversion.
+ * Every number here is a multiple of the panel's own pixel.
+ */
+
+.scr-list {
+  height: 100%;
+  display: grid;
+  /* 5 × 24 = 120, leaving the 8px of dead space the illustrations show. */
+  grid-template-rows: repeat(5, calc(var(--px) * 24));
+  align-content: start;
+}
+
+.scr-row {
+  height: calc(var(--px) * 24);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--px) * 4);
+  padding: 0 calc(var(--px) * 4);
+  /* 11px cap height inside a 24px row. */
+  font-size: calc(var(--px) * 15);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/*
+ * The selection: a solid white rectangle with the glyphs knocked out. Not a
+ * border, dot, arrow or tint — full bleed, no inset, no radius. Measured on all
+ * four list screenshots.
+ */
+.scr-row[data-sel='true'] {
+  background: #fff;
+  color: #000;
+  /* The bloom belongs to lit pixels; inverted rows are lit *around* the text. */
+  text-shadow: none;
+}
+
+.scr-row-label {
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.scr-row-value {
+  flex: none;
+}
+
+/* The screen holds a list edge to edge — the padding lives on the rows. */
+.screen-stat:has(.scr-list) {
+  padding: 0;
 }

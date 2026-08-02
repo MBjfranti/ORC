@@ -23,7 +23,7 @@ export const PERFORM_MODES: readonly PerformMode[] = [
 ]
 
 export const PERFORM_LABEL: Record<PerformMode, string> = {
-  off: 'Block',
+  off: 'Off',
   strum: 'Strum',
   strum2: 'Strum 2 Octaves',
   slop: 'Slop',
@@ -55,6 +55,18 @@ export interface Cycle {
   readonly stepSeconds: number
   /** Note length as a fraction of a step. */
   readonly gate: number
+  /**
+   * Whether steps accumulate into the chord, or ring and let go.
+   *
+   * The arpeggiator builds: each step stays, so the harmony — extensions and
+   * all — assembles under the rhythm, which is what stops a performance mode
+   * from replacing the chord instead of colouring it.
+   *
+   * Pattern and Harp do not. A repeating figure whose notes all pile up stops
+   * being a figure after one pass, and a four-octave harp sweep that sustains
+   * is sixteen notes of mud. Those two want each note to sound and clear.
+   */
+  readonly sustain: boolean
 }
 
 export type Performance = OneShot | Cycle
@@ -67,9 +79,16 @@ export interface PerformOptions {
   readonly random?: () => number
 }
 
-/** True for modes that keep playing while the key is held. */
+/**
+ * True for modes that keep playing while the key is held.
+ *
+ * Harp belongs here now that it flows rather than sweeping once. Leaving it out
+ * was a real fault, not a label: the instrument uses this to decide between
+ * retuning a running loop and diffing a sustained chord, so a Harp edit was
+ * being sent down the wrong path and quietly doing nothing.
+ */
 export function isCycle(mode: PerformMode): boolean {
-  return mode === 'arp' || mode === 'arp2' || mode === 'pattern'
+  return mode === 'arp' || mode === 'arp2' || mode === 'pattern' || mode === 'harp'
 }
 
 export function performChord(
@@ -93,8 +112,7 @@ export function performChord(
     case 'slop':
       return slop(notes, spread(amount), random)
     case 'harp':
-      // Three octaves, swept fast — the flourish.
-      return strum(stack(notes, 3), lerp(0.012, 0.045, amount) / 2)
+      return harp(notes, amount)
     case 'arp':
       return arp(notes, bpm, amount)
     case 'arp2':
@@ -122,20 +140,37 @@ function strum(notes: readonly MidiNote[], gap: number): OneShot {
 }
 
 /**
- * A strum with human timing error, **biased late**.
+ * A strum played by a human rather than a machine.
  *
- * Players drag far more often than they rush, and symmetric noise reads as a
- * broken clock rather than as feel. The exponent skews the distribution toward
- * zero so most notes are close and a few are noticeably behind.
+ * Three things separate it from Strum, and it needs all three — any one alone
+ * is too subtle to hear as a different mode:
+ *
+ *  1. **Timing**, biased late. Players drag far more often than they rush, and
+ *     symmetric noise reads as a broken clock rather than as feel. The exponent
+ *     skews the distribution toward zero so most notes land close and a few are
+ *     noticeably behind. The spread is wider than Strum's own gap, so the notes
+ *     genuinely reorder rather than merely wobbling in place.
+ *  2. **Velocity**, unevenly. A loose hand does not hit every note equally.
+ *  3. **Pitch**, very slightly. A few cents either way per note — the thing
+ *     that makes a real instrument sound like several strings rather than one
+ *     oscillator bank. This is what most "humanize" implementations leave out,
+ *     and it is the most audible of the three.
+ *
+ * The detune rides on the note number itself: a MIDI note is only an index into
+ * a frequency, and nothing downstream requires it to be a whole one.
  */
 function slop(notes: readonly MidiNote[], gap: number, random: () => number): OneShot {
-  const jitter = gap * 0.9
+  // Wider than the strum gap, so notes can genuinely swap order.
+  const jitter = Math.max(gap, 0.02) * 1.6
+  /** A little over an eighth of a semitone, either way. */
+  const cents = 14
+
   return {
     kind: 'oneshot',
     events: notes.map((note, i) => ({
-      note,
+      note: note + ((random() - 0.5) * 2 * cents) / 100,
       time: Math.max(0, i * gap + random() ** 1.6 * jitter - jitter * 0.15),
-      velocity: 0.7 + random() * 0.25,
+      velocity: 0.62 + random() * 0.33,
     })),
   }
 }
@@ -160,6 +195,33 @@ function arp(notes: readonly MidiNote[], bpm: number, amount: number): Cycle {
     steps: [...notes],
     stepSeconds: (60 / bpm) * pick(DIVISIONS, amount),
     gate: 0.8,
+    // Builds the chord up as it goes.
+    sustain: true,
+  }
+}
+
+/**
+ * A harp glissando: up the chord across four octaves and back down, forever.
+ *
+ * A single ascending sweep is just a wide strum, and one that sustains is a
+ * sixteen-note cluster. What makes it read as a harp is that it *keeps going*
+ * and comes back down, with each note ringing briefly and clearing — the sound
+ * is the motion, not the pile.
+ *
+ * The turn is exclusive at both ends so the top and bottom notes are not struck
+ * twice in a row, which is what makes a bounce sound like a stumble.
+ */
+function harp(notes: readonly MidiNote[], amount: number): Cycle {
+  const up = stack(notes, 4)
+  const down = up.slice(1, -1).reverse()
+  return {
+    kind: 'cycle',
+    steps: [...up, ...down],
+    // Fixed, not tempo-synced — the research puts Harp in the fixed-delay
+    // family with the strums. The dial sets how fast it sweeps.
+    stepSeconds: lerp(0.055, 0.018, amount),
+    gate: 0.9,
+    sustain: false,
   }
 }
 
@@ -178,6 +240,12 @@ const PATTERNS: readonly (readonly (number | null)[])[] = [
   [0, 0, 1, 2, 0, 0, 2, 1],
   [2, null, 1, null, 0, null, 1, null],
   [0, 1, null, 2, 3, null, 2, 1],
+  // Eleven, which is the count the reviews give. The last three fill the gaps
+  // the first eight left: a straight run, a syncopated push, and a rest-heavy
+  // one for when the chord should breathe.
+  [0, 1, 2, 3, 0, 1, 2, 3],
+  [null, 0, null, 1, null, 2, null, 3],
+  [0, null, null, null, 2, null, null, 1],
 ]
 
 export const PATTERN_COUNT = PATTERNS.length
@@ -189,6 +257,9 @@ function pattern(notes: readonly MidiNote[], bpm: number, amount: number): Cycle
     steps: chosen.map((i) => (i === null ? null : notes[i % notes.length]!)),
     stepSeconds: (60 / bpm) * 0.25,
     gate: 0.7,
+    // A rhythmic figure has to stay legible, so the notes clear rather than
+    // accumulate — otherwise the pattern is inaudible after one pass.
+    sustain: false,
   }
 }
 
