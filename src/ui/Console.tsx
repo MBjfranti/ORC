@@ -25,7 +25,7 @@
 import { memo, useCallback, useEffect, useRef } from 'react'
 
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
-import { barsLabel } from '../core/looper.js'
+import { barsLabel, LOOP_BARS } from '../core/looper.js'
 import { noteName } from '../core/spelling.js'
 import { keyIndex, KEYS, MODE_LABEL, MODE_SUFFIX } from '../core/types.js'
 import { soundNumber, SOUNDS } from '../engine/sounds.js'
@@ -38,6 +38,7 @@ import {
   ENCODERS,
   encoderLegend,
   isPlaceholder,
+  loopRows,
   rowIndices,
   SCREEN_AFTER,
   screenRows,
@@ -443,6 +444,38 @@ function StatScreen() {
     )
   }
 
+  /*
+   * Loop Mode is a mode, not a view — "push or turn the Loop Dial to access the
+   * Loop Mode Waiting Room" (§12.1) — so it outranks whichever encoder list
+   * happens to be open, and it is the only screen that draws the border. The
+   * Options, FX and Perform menus are edge-to-edge lists with no ring
+   * (research/13 §C.4, scope).
+   */
+  if (s.loopScreen !== null) {
+    return (
+      <div className="screen screen-stat" data-ring="true" role="status" aria-label="Loop">
+        {/*
+          In the Waiting Room the border follows the *cursor*, not the armed
+          length: "selecting a length immediately redraws the border with that
+          many segments" — 4 Bars gives four segments on PDF p18, 16 Bars gives
+          sixteen on p19. It is how you see the length before you record it.
+        */}
+        <LoopRing
+          bars={s.loopScreen === 'sync' ? (LOOP_BARS[s.loopCursor] ?? null) : s.loopBars}
+          length={s.loopLength}
+          state={s.loopState}
+        />
+        <div className="loop-panel">
+          {s.loopState === 'recording' || s.loopState === 'counting' ? (
+            <span className="loop-rec">{s.loopState === 'counting' ? 'Count' : 'Rec'}</span>
+          ) : (
+            <ScreenList rows={loopRows(s)} cursor={s.loopCursor} visible={3} />
+          )}
+        </div>
+      </div>
+    )
+  }
+
   if (!view) {
     return <div className="screen screen-stat" role="status" aria-label="Display" />
   }
@@ -456,6 +489,105 @@ function StatScreen() {
     </div>
   )
 }
+
+/**
+ * The looping border — the signature graphic (research/13 §C.4, measured on
+ * PDF p18a, p18b and p19).
+ *
+ * Every number is off the framebuffer: a 17px ring around the whole 128px
+ * display, outer corners r≈11, an inner black panel of 94×94 at (17,17) with
+ * r≈6, and 3px gaps cutting the full thickness. **The segments are bars** —
+ * four gaps for a 4-bar loop, sixteen for a 16-bar one — so the border tells
+ * you the length before you have played a note.
+ *
+ * The ring is also the progress indicator. Measured on p18b: solid white begins
+ * immediately clockwise of the top-centre gap and runs to 30.9% of the
+ * perimeter, so it **starts at twelve o'clock and fills clockwise, dither for
+ * what is left and solid for what has elapsed**.
+ *
+ * The fill is animated by CSS off the pass length rather than driven through
+ * React — a ring redrawn sixty times a second through the store would put a
+ * render between every keypress and its note. It is `linear` and must not ease:
+ * this is a clock.
+ */
+function LoopRing({ bars, length, state }: { bars: number | null; length: number; state: string }) {
+  // Free loops have no bar count to segment by, so they get one unbroken ring.
+  const segments = bars ?? 1
+  const running = state === 'playing' || state === 'recording' || state === 'overdubbing'
+
+  return (
+    <svg className="loop-ring" viewBox="0 0 128 128" aria-hidden>
+      <defs>
+        {/* 1px 50% checkerboard, the display's only intermediate tone. */}
+        <pattern id="ring-dither" width="2" height="2" patternUnits="userSpaceOnUse">
+          <rect width="1" height="1" fill="#fff" />
+          <rect x="1" y="1" width="1" height="1" fill="#fff" />
+        </pattern>
+      </defs>
+
+      {/* What is left to play. */}
+      <path className="ring-path" d={RING} stroke="url(#ring-dither)" />
+
+      {/* What has elapsed, filling clockwise from twelve o'clock. */}
+      <path
+        className="ring-path ring-fill"
+        d={RING}
+        stroke="#fff"
+        pathLength={100}
+        strokeDashoffset={DASH_ORIGIN}
+        data-running={running}
+        data-paused={state === 'paused'}
+        style={{ ['--pass' as string]: `${length || 1}s` }}
+      />
+
+      {/* The bar gaps, cut through both layers. One lands on twelve o'clock,
+          which is what PDF p18a shows. */}
+      <path
+        className="ring-path"
+        d={RING}
+        stroke="#000"
+        pathLength={100}
+        strokeDasharray={`${GAP} ${100 / segments - GAP}`}
+        strokeDashoffset={DASH_ORIGIN + GAP / 2}
+      />
+
+      {/* The panel the menu is drawn on. */}
+      <rect x="17" y="17" width="94" height="94" rx="6" fill="#000" />
+    </svg>
+  )
+}
+
+/**
+ * The ring's centreline, starting at top-centre and running clockwise.
+ *
+ * Drawn by hand rather than as a `<rect>` because a rect's path begins after
+ * the top-left corner, and the fill has to begin at twelve o'clock. Inset 8.5
+ * so a 17px stroke lands its outer edge on 0 and its inner edge on 17.
+ */
+const RING =
+  'M 64 8.5 H 117 A 2.5 2.5 0 0 1 119.5 11 V 117 A 2.5 2.5 0 0 1 117 119.5 ' +
+  'H 11 A 2.5 2.5 0 0 1 8.5 117 V 11 A 2.5 2.5 0 0 1 11 8.5 H 64'
+
+/** 3px of black, as a share of the centreline's ~440px perimeter. */
+const GAP = 0.7
+
+/**
+ * A quarter turn, because the browser does not start dashing where the path
+ * starts.
+ *
+ * Measured rather than reasoned: with a 6% dash and no offset, the mark lands
+ * on the **left edge midpoint** — three quarters of the way round — even though
+ * `getPointAtLength(0)` reports the path's start as `64,9`, top-centre, and
+ * `getPointAtLength(0.25)` reports `120,64`, so the parameterisation itself is
+ * clockwise from twelve as intended. The dash origin and the path origin simply
+ * disagree by 25%.
+ *
+ * Shifting by a quarter turn puts the fill back at twelve o'clock, which is
+ * where §C.4 measured it starting. Worth re-checking if the ring ever looks
+ * rotated in a different browser — this is a compensation for observed
+ * behaviour, not for something the spec asked for.
+ */
+const DASH_ORIGIN = -25
 
 /** How long a value readout stays up after the last turn. research/13 §B.6. */
 const GLANCE_MS = 1200

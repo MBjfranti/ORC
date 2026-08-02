@@ -23,7 +23,9 @@
  * that is printed on the panel.
  */
 
+import { barsLabel, LOOP_BARS } from '../core/looper.js'
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
+import { looperOrNull } from '../engine/looper.js'
 import { noteName } from '../core/spelling.js'
 import { keyIndex, KEYS, MODE_SUFFIX } from '../core/types.js'
 import type { Key } from '../core/types.js'
@@ -150,6 +152,89 @@ const KEY_INDEX = 3
 
 /** `C`, `F♯m`, `D Dor` — the key as the display names it. */
 const keyName = (key: Key) => noteName(key.tonic, key) + MODE_SUFFIX[key.mode]
+
+// --- Loop -----------------------------------------------------------------
+
+/**
+ * What the Loop screen is showing, row by row.
+ *
+ * Three different menus behind one knob, which is why they are built here
+ * rather than inline: the encoder's `turn` needs the row *count* to clamp
+ * against, and `press` needs to know which row it is on, so both have to ask
+ * the same question and get the same answer.
+ */
+export function loopRows(s: PanelState): Row[] {
+  if (s.loopScreen === 'save') {
+    // §12.7, with `Exit` from [02]. `XX` is the manual's own placeholder for
+    // the next free slot.
+    return [
+      { label: 'Save As Loop 01' },
+      { label: 'Save As' },
+      { label: 'Load Loop' },
+      { label: 'Delete Loop' },
+      { label: 'Exit' },
+    ]
+  }
+
+  if (s.loopScreen === 'transport') {
+    // PDF p18's second illustration shows exactly these three.
+    return [
+      { label: 'Overdub' },
+      { label: s.loopState === 'paused' ? 'Play' : 'Pause' },
+      // "If you undo all overdubs back to the original recording, the Undo
+      // option changes to Clear, which will erase the loop completely." §12.5
+      { label: s.loopLayers > 1 ? 'Undo' : 'Clear' },
+    ]
+  }
+
+  return LOOP_BARS.map((bars) => ({ label: barsLabel(bars) }))
+}
+
+/** The press, in whichever of Loop Mode's three screens is up. */
+function loopPress(s: PanelState): void {
+  const looper = looperOrNull()
+  if (!looper) return
+
+  if (s.loopScreen === null) {
+    s.setLoopScreen('sync')
+    return
+  }
+
+  if (s.loopScreen === 'save') {
+    // Only `Exit` does anything yet; the ten slots need somewhere to live.
+    if (s.loopCursor === 4) s.setLoopScreen(s.loopState === 'empty' ? 'sync' : 'transport')
+    return
+  }
+
+  if (s.loopScreen === 'transport') {
+    switch (s.loopCursor) {
+      case 0:
+        looper.overdub()
+        return
+      case 1:
+        if (s.loopState === 'paused') looper.resume()
+        else looper.pause()
+        return
+      default:
+        // Undo peels a layer; Clear wipes it and hands you back the Waiting
+        // Room, which is where §12.4 says a cleared loop leaves you.
+        if (s.loopLayers > 1) looper.undo()
+        else {
+          looper.reset()
+          s.setLoopScreen('sync')
+        }
+        return
+    }
+  }
+
+  // The Waiting Room. Recording stops on the next press, whether it is a Free
+  // loop being closed by hand or a bar-locked one being cut short.
+  if (s.loopState === 'recording' || s.loopState === 'counting') {
+    looper.closeFree()
+    return
+  }
+  looper.arm(LOOP_BARS[s.loopCursor] ?? null)
+}
 
 /** `+03`, `-02`, `00` — two digits and always a sign, as Transpose is drawn. */
 const signed = (n: number) =>
@@ -389,8 +474,63 @@ export const ENCODERS: readonly Encoder[] = [
    *                research/02, including Bass plays, Single Notes, MIDI
    *                channels and Volumes.
    */
-  { id: 'loop', label: 'Loop', shown: true, place: 'row', digit: 6, cap: 'black' },
-  { id: 'bpm', label: 'BPM', shown: true, place: 'row', digit: 7, cap: 'black' },
+  {
+    /*
+     * Loop. The one encoder the manual gives a whole chapter, and the only one
+     * that *enters a mode* rather than adjusting a value.
+     *
+     *   turn or press, outside  → the Waiting Room (§12.1 — "push **or** turn")
+     *   turn, waiting           → the sync mode: Free, or 1/2/4/8/16 Bars
+     *   press, waiting          → record, after a one-bar count-in in BPM mode
+     *   press, recording        → stop, and start playing back
+     *   turn, playing           → the transport menu
+     *   press, playing          → Overdub / Pause / Undo, whichever you are on
+     *   hold                    → the Save Loop menu (§12.7)
+     *
+     * `Undo` becomes `Clear` once every overdub is off, and `Clear` returns you
+     * to the Waiting Room rather than leaving Loop Mode (§12.5).
+     */
+    id: 'loop',
+    label: 'Loop',
+    shown: true,
+    place: 'row',
+    digit: 6,
+    cap: 'black',
+    turn: (s, d) => {
+      if (s.loopScreen === null) {
+        s.setLoopScreen('sync')
+        return
+      }
+      s.moveLoopCursor(d, loopRows(s).length)
+    },
+    press: (s) => loopPress(s),
+    hold: (s) => (s.loopScreen === null ? s.setLoopScreen('sync') : s.setLoopScreen('save')),
+    lamp: (s) => s.loopState !== 'empty',
+    list: (s) => ({ rows: loopRows(s), cursor: s.loopCursor }),
+    sensitivity: 10,
+  },
+  {
+    /*
+     * BPM. One clock drives everything — the arpeggiator, Pattern, loop bar
+     * lengths and loop quantisation (research/08 §Master clock). There is no
+     * per-function tempo, which is why turning this while a loop is armed
+     * changes how long a bar is.
+     *
+     * Built: the tempo. Not built, and both needing engines we do not have —
+     * press toggles the metronome or starts and stops a Beat, hold lists the
+     * twenty pre-programmed Beats, and hold-and-turn sets their volume
+     * (research/08 §Beat machine).
+     */
+    id: 'bpm',
+    label: 'BPM',
+    shown: true,
+    place: 'row',
+    digit: 7,
+    cap: 'black',
+    turn: (s, d) => s.setBpm(s.bpm + d),
+    readout: (s) => ({ value: String(s.bpm), label: 'BPM' }),
+    sensitivity: 6,
+  },
   { id: 'options', label: 'Options', shown: true, place: 'row', digit: 8, cap: 'black' },
 
   // --- between the hands ---------------------------------------------------

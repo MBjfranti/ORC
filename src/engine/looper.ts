@@ -100,12 +100,13 @@ export class Looper {
 
     this.state = 'counting'
     this.passStart = this.now()
+    // Assigned directly rather than through `begin`, because a count-in has no
+    // schedule of its own — so it has to announce itself, or the panel sits on
+    // the Waiting Room through the whole bar you are counting.
+    this.onChange?.()
     this.countIn?.(1)
     this.countInId = Tone.getTransport().scheduleOnce(
-      () => {
-        this.begin('recording')
-        this.onChange?.()
-      },
+      () => this.begin('recording'),
       this.now() + barsToSeconds(1, this.bpm),
     )
   }
@@ -118,8 +119,17 @@ export class Looper {
     this.begin('playing')
   }
 
+  /*
+   * Every transport method announces itself.
+   *
+   * They used not to: the only caller was `App`, which called `view()` by hand
+   * afterwards. The Loop encoder now drives them directly, and a transport that
+   * changes state without saying so leaves the panel showing the last thing it
+   * knew — a ring still sweeping round a loop that has been cleared.
+   */
   overdub(): void {
     if (this.loop && this.state === 'playing') this.state = 'overdubbing'
+    this.onChange?.()
   }
 
   stopRecording(): void {
@@ -127,6 +137,7 @@ export class Looper {
       this.commit()
       this.state = 'playing'
     }
+    this.onChange?.()
   }
 
   /**
@@ -161,16 +172,19 @@ export class Looper {
     this.unschedule()
     this.synth.allNotesOff()
     this.state = 'paused'
+    this.onChange?.()
   }
 
   resume(): void {
     if (this.state === 'paused') this.begin('playing')
+    this.onChange?.()
   }
 
   undo(): void {
     if (!this.loop) return
     this.loop = undoLayer(this.loop)
     if (isEmpty(this.loop)) this.reset()
+    this.onChange?.()
   }
 
   /** Full stop: drop the loop and release anything it was holding. */
@@ -180,6 +194,7 @@ export class Looper {
     this.recorder.finish(0)
     this.loop = undefined
     this.state = 'empty'
+    this.onChange?.()
   }
 
   load(loop: Loop): void {
@@ -219,6 +234,9 @@ export class Looper {
     this.state = state
     this.passStart = this.now()
     if (this.loop && this.loop.lengthSeconds > 0) this.schedule()
+    // Covers `arm`, `closeFree` and `resume` in one place — every route into a
+    // new transport state passes through here.
+    this.onChange?.()
   }
 
   /**
@@ -284,3 +302,21 @@ export class Looper {
     this.loop = withLayer(this.loop, quantize(events, this.grid, this.bpm, this.loop.lengthSeconds))
   }
 }
+
+/**
+ * Module-level singleton, the same bargain `getSynth()` makes.
+ *
+ * The Loop encoder has to reach the transport from inside `encoders.ts`, which
+ * is data rather than a component and has no props to be handed one through.
+ * The alternative was threading a context object through every encoder's
+ * `turn`, `press` and `list` for the sake of one knob.
+ */
+let instance: Looper | undefined
+
+export function getLooper(synth: Synth): Looper {
+  instance ??= new Looper(synth)
+  return instance
+}
+
+/** The live looper, once something has built it. */
+export const looperOrNull = (): Looper | undefined => instance

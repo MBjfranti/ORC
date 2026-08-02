@@ -34,9 +34,16 @@ export interface Loop {
 
 export const LOOP_BARS: readonly (number | null)[] = [null, 1, 2, 4, 8, 16]
 
+/**
+ * As the display writes them — capital B, plural.
+ *
+ * `2 Bars`, `4 Bars`, `8 Bars` and `16 Bars` are read off PDF p18 and p19;
+ * `Free` and `1 Bar` are inferred from the prose, since neither is illustrated
+ * (research/13 §M7).
+ */
 export function barsLabel(bars: number | null): string {
   if (bars === null) return 'Free'
-  return bars === 1 ? '1 bar' : `${bars} bars`
+  return bars === 1 ? '1 Bar' : `${bars} Bars`
 }
 
 export function emptyLoop(lengthSeconds: number, bars: number | null): Loop {

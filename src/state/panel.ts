@@ -13,6 +13,7 @@ import { buildChord } from '../core/chord.js'
 import { GRIDS, LOOP_BARS } from '../core/looper.js'
 import { clampVoicing } from '../core/voicing.js'
 import type { Grid } from '../core/looper.js'
+import type { LoopState } from '../engine/looper.js'
 import { PERFORM_MODES } from '../core/performance.js'
 import type { PerformMode } from '../core/performance.js'
 import { MODES } from '../core/types.js'
@@ -147,6 +148,31 @@ export interface PanelState {
   /** Length of the next recording. `null` records until you stop it. */
   loopBars: number | null
   loopGrid: Grid
+  /**
+   * Which of Loop Mode's three screens is up (research/13 §M7–M9).
+   *
+   *   sync       the Waiting Room — pick Free or a bar count, then record
+   *   transport  while a loop runs — Overdub / Pause / Undo
+   *   save       the hold menu — Save As / Load / Delete / Exit
+   *
+   * `null` is not in Loop Mode at all. The manual treats entering as a real
+   * state change, not a view: "push or turn the Loop Dial to access the Loop
+   * Mode Waiting Room".
+   */
+  loopScreen: 'sync' | 'transport' | 'save' | null
+  loopCursor: number
+  /**
+   * The transport's state and layer count, mirrored from the engine.
+   *
+   * Only the discrete parts. The ring's *position* is deliberately absent —
+   * it moves every frame, and the spec has it animated by CSS off a duration
+   * rather than driven through React, which is also what keeps a running loop
+   * from re-rendering the tree sixty times a second.
+   */
+  loopState: LoopState
+  loopLayers: number
+  /** Seconds per pass, which is the progress ring's animation duration. */
+  loopLength: number
 
   /**
    * Which encoder the number row is addressing.
@@ -248,6 +274,9 @@ export interface PanelState {
   setBassMode: (mode: BassMode) => void
   cycleBassMode: (delta: number) => void
   cycleLoopBars: (delta: number) => void
+  setLoopScreen: (screen: PanelState['loopScreen']) => void
+  moveLoopCursor: (delta: number, rows: number) => void
+  syncLoop: (state: LoopState, layers: number, bars: number | null, length: number) => void
   setLoopGrid: (grid: Grid) => void
   toggleLatch: () => void
   setDialFocus: (index: number) => void
@@ -362,6 +391,11 @@ export const usePanel = create<PanelState>((set) => ({
 
   loopBars: 4,
   loopGrid: 'off',
+  loopScreen: null,
+  loopCursor: 3, // 4 Bars, the length PDF p18 shows selected
+  loopState: 'empty',
+  loopLayers: 0,
+  loopLength: 0,
 
   dialFocus: 0,
   screenList: null,
@@ -584,6 +618,32 @@ export const usePanel = create<PanelState>((set) => ({
    * Only on a full close — reopening the same menu has to preserve the state,
    * or the press that toggles adjust would clear it on the way in.
    */
+  setLoopScreen: (loopScreen) => set({ loopScreen }),
+  moveLoopCursor: (delta, rows) =>
+    set((s) => ({ loopCursor: Math.max(0, Math.min(rows - 1, s.loopCursor + delta)) })),
+
+  /**
+   * Mirror the transport in, so the panel re-renders when it moves.
+   *
+   * Also parks the cursor: coming out of a recording onto the transport menu
+   * should land on `Pause`, which is where PDF p18's illustration has it and
+   * the only row you are likely to want first.
+   */
+  syncLoop: (loopState, loopLayers, bars, loopLength) =>
+    set((s) => {
+      const running = loopState !== 'empty'
+      const screen = s.loopScreen === null ? null : s.loopScreen === 'save' ? 'save' : running ? 'transport' : 'sync'
+      const cursor = screen !== s.loopScreen && screen === 'transport' ? 1 : s.loopCursor
+      return {
+        loopState,
+        loopLayers,
+        loopLength,
+        loopScreen: screen,
+        loopCursor: cursor,
+        ...(bars !== undefined && running ? { loopBars: bars } : {}),
+      }
+    }),
+
   setScreenList: (screenList) =>
     set(
       screenList === null

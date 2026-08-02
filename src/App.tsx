@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 import { Instrument } from './engine/instrument.js'
 import type { Sounding } from './engine/instrument.js'
-import { Looper } from './engine/looper.js'
+import { getLooper } from './engine/looper.js'
 import type { LoopView } from './engine/looper.js'
 import { getSynth } from './engine/synth.js'
 import {
@@ -47,9 +47,7 @@ export default function App() {
   const [legends, setLegends] = useState<Legends>(DEFAULT_LEGENDS)
 
   const synth = getSynth()
-  const looperRef = useRef<Looper>(undefined)
-  looperRef.current ??= new Looper(synth)
-  const looper = looperRef.current
+  const looper = getLooper(synth)
 
   const instrumentRef = useRef<Instrument>(undefined)
   instrumentRef.current ??= new Instrument(synth, looper)
@@ -157,7 +155,18 @@ export default function App() {
   const [loopView, setLoopView] = useState<LoopView>(() => looper.view())
 
   useEffect(() => {
-    looper.configure({ bpm, grid: loopGrid, onChange: () => setLoopView(looper.view()) })
+    looper.configure({
+      bpm,
+      grid: loopGrid,
+      onChange: () => {
+        const view = looper.view()
+        setLoopView(view)
+        // Mirror the discrete parts into the panel so the screen re-renders on
+        // a transport event. The *position* stays out of it — the ring animates
+        // itself off the pass length.
+        usePanel.getState().syncLoop(view.state, view.layers, view.bars, view.lengthSeconds)
+      },
+    })
   }, [looper, bpm, loopGrid])
 
   /**
@@ -169,7 +178,12 @@ export default function App() {
    * happened. Every keypress then had to compete with a render that was always
    * in flight, which showed up as jitter rather than as latency.
    */
-  const live = loopView.state !== 'empty'
+  /*
+   * Only for the readouts. The looping border does not need this: it is a CSS
+   * animation off the pass length, so a running loop now costs zero renders
+   * instead of two hundred a pass.
+   */
+  const live = SHOW_READOUTS && loopView.state !== 'empty'
   useEffect(() => {
     if (!live) return
     let raf = 0
@@ -461,6 +475,18 @@ export default function App() {
           )
           break
         }
+        /*
+         * The hard exit: "long press the Bass Voicing Dial and press the Loop
+         * Dial to instantly stop your Loop and leave Loop Mode" (§12.4). It is
+         * the one two-handed shortcut on the instrument, and it is documented
+         * as losing an unsaved loop — so it stays deliberate rather than being
+         * folded into Escape.
+         */
+        case 'Backslash':
+          e.preventDefault()
+          looper.reset()
+          s.setLoopScreen(null)
+          break
         case 'Escape':
           s.cancelKeySelect()
           s.setScreenList(null)

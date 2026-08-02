@@ -1554,7 +1554,7 @@ body {
   height: 100%;
   display: grid;
   /* 5 × 24 = 120, leaving the 8px of dead space the illustrations show. */
-  grid-template-rows: repeat(5, calc(var(--px) * 24));
+  grid-template-rows: repeat(var(--rows, 5), calc(var(--px) * 24));
   align-content: start;
 }
 
@@ -1739,4 +1739,108 @@ body {
 /* The screen holds a list edge to edge — the padding lives on the rows. */
 .screen-stat:has(.scr-list) {
   padding: 0;
+}
+
+/* --- the looping border (research/13 §C.4) --------------------------------
+ *
+ * Measured, not styled. A 17px ring around the whole display, an inner black
+ * panel of 94×94, 3px gaps at every bar boundary, and a fill that starts at
+ * twelve o'clock and runs clockwise. It appears on Loop Mode screens only.
+ */
+
+.screen-stat[data-ring='true'] {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+}
+
+.loop-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.ring-path {
+  fill: none;
+  /* 17 of the 128 logical pixels, in the SVG's own units. */
+  stroke-width: 17;
+}
+
+/*
+ * The elapsed arc. Animated off the pass length rather than driven by React —
+ * and `linear`, because the ring is a clock and easing it would make it lie.
+ */
+/*
+ * One dash that grows, rather than a repeating pattern that is offset.
+ *
+ * `stroke-dasharray: 100` on a *closed* path is two dashes of 100 with the
+ * pattern wrapping at the seam, and shifting it by an offset put the visible
+ * arc either side of twelve o'clock instead of starting there. A single dash
+ * against an enormous gap cannot wrap, so it grows from the path's own start —
+ * which the path puts at top-centre — clockwise, and nothing else can happen.
+ */
+.ring-fill {
+  stroke-dasharray: 0 1000;
+}
+
+.ring-fill[data-running='true'] {
+  animation: ring-fill var(--pass, 1s) linear infinite;
+}
+
+.ring-fill[data-paused='true'] {
+  animation: ring-fill var(--pass, 1s) linear infinite;
+  animation-play-state: paused;
+}
+
+@keyframes ring-fill {
+  from {
+    stroke-dasharray: 0 1000;
+  }
+  to {
+    stroke-dasharray: 100 1000;
+  }
+}
+
+/*
+ * The menu sits on the inner panel: 94 × 94 at (17, 17) of 128.
+ *
+ * As percentages, not `--px`. The ring is an SVG that scales to whatever the
+ * element actually is, and `--px` is derived from `--screen` — which is what
+ * the screen was *asked* to be, not what it ended up. The two disagreed by a
+ * few pixels and the panel drifted off the ring it is supposed to sit inside.
+ */
+.loop-panel {
+  position: absolute;
+  left: 13.28%; /* 17/128 */
+  top: 13.28%;
+  width: 73.44%; /* 94/128 */
+  height: 73.44%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Three rows sharing the panel, rather than the 24px pitch of a full-height
+   list — there is only 94px to work with. */
+.loop-panel .scr-list {
+  width: 100%;
+  height: 100%;
+  grid-template-rows: repeat(var(--rows, 3), 1fr);
+}
+
+.loop-panel .scr-row {
+  height: auto;
+  font-size: calc(var(--px) * 14);
+  padding-inline: calc(var(--px) * 3);
+}
+
+/* `Rec` is shown on the display during recording (§12.3). */
+.loop-rec {
+  font-family: var(--label);
+  font-size: calc(var(--px) * 26);
+  line-height: 1;
+  letter-spacing: 0.04em;
 }

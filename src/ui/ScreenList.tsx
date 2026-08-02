@@ -26,10 +26,18 @@ export const CURSOR_ROW = 2
  * Which item index sits in each of the five slots — `null` where the list has
  * run out. This is the whole of the fixed-cursor behaviour.
  */
-export function viewport(count: number, cursor: number): (number | null)[] {
-  return [-2, -1, 0, 1, 2].map((offset) => {
-    const i = cursor + offset
-    return i >= 0 && i < count ? i : null
+export function viewport(
+  count: number,
+  cursor: number,
+  visible: number = VISIBLE_ROWS,
+): (number | null)[] {
+  // The cursor sits in the middle row, whatever the height. Loop Mode's menus
+  // are three rows rather than five, because they are drawn *inside* the ring
+  // and only 94 of the 128 pixels are left (PDF p18).
+  const mid = Math.floor(visible / 2)
+  return Array.from({ length: visible }, (_, i) => {
+    const index = cursor + i - mid
+    return index >= 0 && index < count ? index : null
   })
 }
 
@@ -57,14 +65,22 @@ export interface Row {
 export const ScreenList = memo(function ScreenList({
   rows,
   cursor,
+  visible = VISIBLE_ROWS,
 }: {
   rows: readonly Row[]
   cursor: number
+  visible?: number
 }) {
-  const slots = viewport(rows.length, cursor)
+  const slots = viewport(rows.length, cursor, visible)
+  const mid = Math.floor(visible / 2)
 
   return (
-    <div className="scr-list" role="listbox" aria-activedescendant={`row-${cursor}`}>
+    <div
+      className="scr-list"
+      role="listbox"
+      aria-activedescendant={`row-${cursor}`}
+      style={{ ['--rows' as string]: String(visible) }}
+    >
       {slots.map((index, slot) => {
         // A blank slot is the list running out. There is no scrollbar, no arrow
         // and no ellipsis anywhere on this panel — the empty row *is* the
@@ -78,8 +94,8 @@ export const ScreenList = memo(function ScreenList({
             id={`row-${index}`}
             className="scr-row"
             role="option"
-            aria-selected={slot === CURSOR_ROW}
-            data-sel={slot === CURSOR_ROW}
+            aria-selected={slot === mid}
+            data-sel={slot === mid}
           >
             <span className="scr-row-label">{row.label}</span>
             {row.value && (
