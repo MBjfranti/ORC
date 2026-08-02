@@ -24,6 +24,7 @@
 import * as Tone from 'tone'
 
 import type { MidiNote } from '../core/types.js'
+import { bassAt } from './bass.js'
 import { decayFor, soundAt } from './sounds.js'
 import type { Sound } from './sounds.js'
 
@@ -462,6 +463,38 @@ class Synth {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any)
     }
+  }
+
+  /**
+   * Load a bass preset.
+   *
+   * The bass has its own list because it is its own instrument — a separate
+   * monophonic synth with its own voicing and volume (research/07). Its
+   * envelopes are plain seconds rather than the treble library's time
+   * constants, so they pass through untouched; see `bass.ts`.
+   */
+  setBassSound(index: number): void {
+    if (!this.started) return
+    const sound = bassAt(index)
+    this.bass.set({
+      oscillator: { type: sound.wave },
+      envelope: {
+        attack: sound.attack,
+        decay: sound.decay,
+        sustain: sound.sustain,
+        release: sound.release,
+      },
+      filter: { Q: sound.q },
+      filterEnvelope: {
+        attack: sound.filterAttack,
+        decay: sound.filterDecay,
+        sustain: sound.filterSustain,
+        release: sound.release,
+        baseFrequency: sound.base,
+        octaves: sound.octaves,
+      },
+      volume: sound.volume,
+    })
   }
 
   setBpm(bpm: number): void {

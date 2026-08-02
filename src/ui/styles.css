@@ -37,6 +37,10 @@
 
   /* The hardware's knob cap. */
   --cap-amber: #f3c218;
+  /* Bass. Orange on the hardware — research/02 names the colour explicitly. */
+  --cap-orange: #e2571f;
+  /* The unlabelled majority: Key, Loop, BPM and the two Voicing dials. */
+  --cap-black: #303338;
 
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --label: 'Saira Semi Condensed', system-ui, sans-serif;
@@ -126,14 +130,35 @@ body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  /* The middle column is only as wide as the voicing dials need — it is a
+     divider between the hands, not a third panel. */
+  grid-template-columns: minmax(0, 0.82fr) auto minmax(0, 1.18fr);
   /* One third to what you read, two thirds to what you play. The hands need
      the room far more than the readouts do. */
   grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
   grid-template-areas:
-    'top  top'
-    'left right';
+    'top  top    top'
+    'left voice  right';
   gap: var(--gap);
+}
+
+/*
+ * The voicing dials: between the hands, stacked, Chord above Bass.
+ *
+ * They belong here rather than in the top row because of when you use them —
+ * mid-chord, with the hand that is already holding it. Centred vertically so
+ * the pair reads as one unit rather than as two knobs that happen to be
+ * adjacent.
+ */
+.voicings {
+  grid-area: voice;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.6rem;
+  padding-inline: 0.5rem;
 }
 
 .top {
@@ -820,6 +845,20 @@ body {
 @media (max-width: 980px) {
   .stage {
     grid-template-columns: 1fr;
+    /* One column, so the voicing dials stop being a divider and become a row
+       of their own between the two hands. */
+    grid-template-areas:
+      'top'
+      'left'
+      'voice'
+      'right';
+    grid-template-rows: auto auto auto auto;
+  }
+
+  .voicings {
+    flex-direction: row;
+    justify-content: center;
+    gap: 2rem;
   }
 
   .stack {
@@ -971,13 +1010,13 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 3.2rem;
+  width: var(--dial-w, 3.2rem);
   gap: 0.1rem;
 }
 
 .dial-knob {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: var(--knob, 2.5rem);
+  height: var(--knob, 2.5rem);
   cursor: ns-resize;
   touch-action: none;
   border-radius: 50%;
@@ -1366,23 +1405,124 @@ body {
   gap: 0.3rem;
 }
 
-.dial[data-cap='amber'] .dial-body {
+/* A run of knobs. The screen sits between two of these. */
+.encoder-bank {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.15rem;
+}
+
+/* Chord Voicing is the largest control on the instrument, which is the point:
+   it is the one you reach for without looking. */
+.encoder[data-size='lg'] {
+  --knob: 4.2rem;
+  --dial-w: 5rem;
+}
+
+.encoder[data-size='lg'] .encoder-legend {
+  font-size: 0.7rem;
+}
+
+/*
+ * On the panel, not built yet. Held back rather than hidden so the row keeps
+ * its shape and its numbering — and drawn plainly enough that it reads as a
+ * knob waiting its turn rather than one that is broken.
+ */
+.encoder[data-pending='true'] {
+  /* Enough to read as held back, not so much that a black cap turns grey. */
+  opacity: 0.58;
+}
+
+.encoder[data-pending='true'] .dial-knob {
+  cursor: default;
+}
+
+/* Which colour each cap is. The knob itself is drawn once; only this changes.
+   Bass being orange is the hardware's choice, not ours (research/02). */
+.dial[data-cap='amber'] {
+  --cap: var(--cap-amber, #f3c218);
+  --pointer: #17181a;
+}
+
+.dial[data-cap='orange'] {
+  --cap: var(--cap-orange, #e2571f);
+  --pointer: #17181a;
+}
+
+/* Black caps need the pointer the other way round: a dark line on a dark cap
+   is no line at all. */
+.dial[data-cap='black'] {
+  --cap: var(--cap-black, #303338);
+  --pointer: #c9ccd1;
+}
+
+.dial:not([data-cap='outline']) .dial-body {
   fill: #17181a;
 }
 
-.dial[data-cap='amber'] .dial-cap {
-  fill: var(--cap-amber, #f3c218);
+.dial:not([data-cap='outline']) .dial-cap {
+  fill: var(--cap);
 }
 
 /* Cut into the cap, so it reads as moulded rather than printed on. */
-.dial[data-cap='amber'] .dial-pointer {
-  stroke: #17181a;
+.dial:not([data-cap='outline']) .dial-pointer {
+  stroke: var(--pointer);
   stroke-width: 2.4;
 }
 
 /* The track and value arc sit outside the body. */
-.dial[data-cap='amber'] .dial-track {
+.dial:not([data-cap='outline']) .dial-track {
   stroke: var(--rule-strong);
+}
+
+/*
+ * The indicator lamp beside a knob — the hardware's way of saying a section is
+ * live (research/02, documented on Key and Perform). Unlit it stays visible as
+ * a dark bezel, because a lamp that vanishes when off cannot be read as off.
+ */
+.encoder-lamp {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--rule-strong);
+  box-shadow: none;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.encoder-lamp[data-on='true'] {
+  background: var(--cap-orange, #e2571f);
+  /* Lit, so it spills a little. Additive light only — the bezel does not move. */
+  box-shadow: 0 0 5px 1px color-mix(in srgb, var(--cap-orange, #e2571f) 55%, transparent);
+}
+
+/*
+ * A lock is not an on.
+ *
+ * FX and Perform have no on/off at all — effects switch off at amount `00` and
+ * Perform by turning fully left. Their lamp reports that the section is
+ * *frozen*, which is a different claim, so it is drawn hollow: a ring reads as
+ * a latch, a filled dot reads as power, and at a glance nobody has to remember
+ * which knob means which.
+ */
+.encoder-lamp[data-kind='lock'] {
+  width: 7px;
+  height: 7px;
+  background: none;
+  border: 1.5px solid var(--rule-strong);
+}
+
+.encoder-lamp[data-kind='lock'][data-on='true'] {
+  background: none;
+  border-color: var(--cap-orange, #e2571f);
+  box-shadow: 0 0 4px 0 color-mix(in srgb, var(--cap-orange, #e2571f) 45%, transparent);
+}
+
+/* A bypassed engine. The lamp above is the signal; the cap only drains a
+   little, so the knob still reads as a knob you can turn. */
+.encoder[data-off='true'] .dial-cap {
+  fill: color-mix(in srgb, var(--cap) 45%, #17181a);
 }
 
 .encoder-legend {
@@ -1451,6 +1591,149 @@ body {
 
 .scr-row-value {
   flex: none;
+}
+
+/*
+ * Being edited rather than shown. Knocked back out of the selected row's own
+ * inversion, so the number reads as the thing under your hand — the difference
+ * between "this row is selected" and "this number is what the knob is turning".
+ */
+.scr-row[data-sel='true'] .scr-row-value[data-editing='true'] {
+  background: #000;
+  color: #fff;
+  padding-inline: calc(var(--px) * 2);
+  margin-right: calc(var(--px) * -2);
+}
+
+/* --- the value readout ("glance") -----------------------------------------
+ *
+ * research/13 §C.3, measured off the framebuffer illustrations: the numerals
+ * occupy y 1–108 of the 128px panel, a 1–2px gap follows, and the label runs
+ * y 111–126 at the same 11px cap height as a list row. Every length here is a
+ * multiple of the panel's own pixel.
+ */
+
+.scr-value {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.scr-value-field {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.scr-value-num {
+  font-family: var(--label);
+  /* 108px of cap height needs a type size above it; measured, not chosen. */
+  font-size: calc(var(--px) * 132);
+  line-height: calc(var(--px) * 110);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  /* Condensed to fit the panel's width — see the note in `ScreenValue`. */
+  transform: scaleX(var(--scale, 1));
+  /*
+   * The numerals do the blending, not the fill.
+   *
+   * A blend mode composites an element with the backdrop *beneath* it, and the
+   * fill is painted after the digits — so blending the fill knocked the digits
+   * out of existence rather than out of the fill. Turning it round is the
+   * honest 1-bit XOR: white glyph over the white fill goes black, the same
+   * glyph over black background stays white.
+   */
+  position: relative;
+  mix-blend-mode: difference;
+}
+
+/* The level, rising from the bottom of the numeral field. Only for bounded
+   0–99 values (measured on Bass Volume, research/13 §C.3). */
+.scr-value-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--level) * 100%);
+  background: #fff;
+  transition: height 60ms linear;
+}
+
+.scr-value-label {
+  flex: none;
+  height: calc(var(--px) * 16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--label);
+  font-size: calc(var(--px) * 15);
+  line-height: 1;
+}
+
+/*
+ * A press-and-turn readout gets a solid inverted footer, full width.
+ *
+ * Measured, not chosen: the manual's two press-and-turn illustrations — Bass
+ * Volume and Transpose — both carry it, and its four plain-turn readouts do
+ * not. Two for two with a clean mechanical explanation, so it is the secondary
+ * axis's own signature (research/13 §C.3).
+ */
+.scr-value-label[data-secondary='true'] {
+  background: #fff;
+  color: #000;
+  text-shadow: none;
+}
+
+/* --- the quick key select prompt (§9.2) ----------------------------------- */
+
+.scr-prompt {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--px) * 10);
+  padding: calc(var(--px) * 8);
+}
+
+.scr-prompt-text {
+  font-family: var(--label);
+  font-size: calc(var(--px) * 17);
+  line-height: 1;
+}
+
+/* One octave, drawn at the panel's own pixel. */
+.scr-keys {
+  position: relative;
+  display: flex;
+  gap: calc(var(--px) * 2);
+  width: 100%;
+  height: calc(var(--px) * 46);
+}
+
+.scr-key {
+  flex: 1;
+  background: #fff;
+}
+
+.scr-key-black {
+  position: absolute;
+  top: 0;
+  height: 62%;
+  width: calc(100% / 13);
+  background: #000;
+  /* Straddling the join after white key `--after`, which is where a black key
+     actually is — hence the two-then-three grouping. */
+  left: calc((var(--after) + 1) / 7 * 100%);
+  transform: translateX(-50%);
 }
 
 /* The screen holds a list edge to edge — the padding lives on the rows. */

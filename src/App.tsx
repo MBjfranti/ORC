@@ -14,9 +14,10 @@ import {
 } from './input/layout.js'
 import type { Legends } from './input/layout.js'
 import { usePanel } from './state/panel.js'
-import { ENCODERS } from './ui/encoders.js'
+import type { PanelState } from './state/panel.js'
+import { ENCODERS, encoderByDigit, encoderById, turnEncoder } from './ui/encoders.js'
 import { ChordDisplay } from './ui/ChordDisplay.js'
-import { Console } from './ui/Console.js'
+import { Console, Voicings } from './ui/Console.js'
 import { Keybed } from './ui/Keybed.js'
 import { Loop } from './ui/Loop.js'
 import { Pads } from './ui/Pads.js'
@@ -93,6 +94,7 @@ export default function App() {
     synth.setDelay(s.delay)
     synth.setVolume(s.volume)
     synth.setBassLevel(s.bassLevel)
+    synth.setBassSound(s.bassIndex)
     synth.setBpm(s.bpm)
   }, [synth])
 
@@ -105,6 +107,7 @@ export default function App() {
   const delayAmount = usePanel((s) => s.delay)
   const volume = usePanel((s) => s.volume)
   const bassLevel = usePanel((s) => s.bassLevel)
+  const bassIndex = usePanel((s) => s.bassIndex)
   const bpm = usePanel((s) => s.bpm)
   const loopGrid = usePanel((s) => s.loopGrid)
 
@@ -115,6 +118,7 @@ export default function App() {
   useEffect(() => void synth.setDelay(delayAmount), [synth, delayAmount])
   useEffect(() => void synth.setVolume(volume), [synth, volume])
   useEffect(() => void synth.setBassLevel(bassLevel), [synth, bassLevel])
+  useEffect(() => void synth.setBassSound(bassIndex), [synth, bassIndex])
   useEffect(() => void synth.setBpm(bpm), [synth, bpm])
 
   // --- live chord edits ----------------------------------------------------
@@ -195,6 +199,120 @@ export default function App() {
 
   useEffect(() => {
     /**
+     * Holding an encoder key keeps turning it.
+     *
+     * The OS would do this for us, but every note key goes through the same
+     * handler and notes must never autorepeat — so autorepeat is refused at the
+     * top of `onDown` and the encoders bring their own. Which is the better
+     * arrangement anyway: the OS repeat rate is a system preference, and
+     * scrolling fifty sounds should not feel different on someone else's
+     * machine.
+     *
+     * It accelerates. A short delay first, so a tap stays a tap, then steadily
+     * faster the longer it is held — near enough to spinning a real encoder,
+     * and it keeps a fifty-item list about a second away end to end.
+     */
+    let repeatTimer: number | undefined
+    const stopRepeat = () => {
+      if (repeatTimer !== undefined) window.clearTimeout(repeatTimer)
+      repeatTimer = undefined
+    }
+    /**
+     * Always re-read: the focused encoder and its value both move under us.
+     *
+     * With a knob's number held down this turns its **secondary** axis instead
+     * — Key reaches Transpose that way, and Volume and BPM will reach their own
+     * when they arrive (research/13 §B.7). Turning also cancels the pending
+     * hold, or the menu would open underneath the gesture. The hardware shipped
+     * with precisely that bug: "Transpose adjustment no longer accidentally
+     * toggles Key", v3.90.
+     */
+    const turnFocused = (delta: number) => {
+      const st = usePanel.getState()
+      const held = digitHold
+      const secondary = held ? ENCODERS[held.index]?.secondary : undefined
+      if (held && secondary) {
+        stopDigitHold()
+        secondary.turn(st, delta)
+        const next = usePanel.getState()
+        next.showGlance(secondary.value(next), secondary.label, undefined, true)
+        return
+      }
+      turnEncoder(st.dialFocus, st, delta)
+    }
+    /** Do it once now, then keep doing it, faster, for as long as it is held. */
+    const startRepeat = (act: () => void) => {
+      stopRepeat()
+      act()
+      let step = 0
+      const tick = () => {
+        act()
+        step += 1
+        repeatTimer = window.setTimeout(tick, step < 6 ? 90 : step < 16 ? 50 : 28)
+      }
+      repeatTimer = window.setTimeout(tick, 300)
+    }
+
+    /**
+     * A number key is that encoder's cap. The whole gesture set lives on the
+     * one digit, with no modifier:
+     *
+     *   tap         → open that encoder's list
+     *   double-tap  → press it (Bass switches its engine off, Key toggles
+     *                 Key Mode) — the hardware's press, which is a real
+     *                 function and not a way of selecting anything
+     *   hold        → its menu
+     *
+     * The list opens on key *up*, because a tap and the start of a hold look
+     * identical until you let go: opening on the way down would flash a list
+     * nobody asked for on the way to every menu.
+     */
+    let digitHold: { index: number; timer: number; fired: boolean } | null = null
+
+    const stopDigitHold = () => {
+      if (digitHold) window.clearTimeout(digitHold.timer)
+      digitHold = null
+    }
+    const startDigitHold = (index: number) => {
+      stopDigitHold()
+      const hold = { index, fired: false, timer: 0 }
+      hold.timer = window.setTimeout(() => {
+        hold.fired = true
+        ENCODERS[index]?.hold?.(usePanel.getState())
+      }, 550)
+      digitHold = hold
+    }
+
+    /**
+     * A completed tap: **reach for the knob, or press it.**
+     *
+     * A physical panel does not need a way to say "this knob" — your hand says
+     * it. A keyboard does, and that gesture has to come from somewhere. Giving
+     * it the first tap and leaving the press to a *second* tap costs a tap only
+     * when you change knobs, which is exactly when it should cost something.
+     *
+     *     5   Bass takes focus, its list opens      (reach)
+     *     5   engine off                            (press)
+     *     5   engine on                             (press)
+     *
+     * The earlier arrangement put the press on a timed double-tap, which made
+     * the one-gesture rule — press is always the section's switch — into a
+     * different gesture on the keyboard than on the panel, and made Bass on/off
+     * depend on how fast you can type. This keeps one press meaning one press.
+     *
+     * Nothing here closes the display: `0`, Escape and the `Exit` row do that,
+     * the last of which is how the hardware does it.
+     */
+    const resolveTap = (index: number, s: PanelState) => {
+      if (s.dialFocus !== index) {
+        s.setDialFocus(index)
+        s.setScreenList(index)
+        return
+      }
+      ENCODERS[index]?.press?.(s)
+    }
+
+    /**
      * The play path.
      *
      * This calls the instrument directly. No state is read through a hook, no
@@ -210,6 +328,17 @@ export default function App() {
       if (e.code in roots) {
         e.preventDefault()
         const root = roots[e.code]!
+
+        /*
+         * The quick key select prompt is up, so the keybed is answering it
+         * rather than playing: the root you press *is* the key, minor if the
+         * `Min` pad is down (§9.2). No note sounds — you are spelling a key,
+         * not playing one.
+         */
+        if (s.keySelect) {
+          s.pickKey(root, s.heldTypes.includes('min'))
+          return
+        }
 
         // The first note of the session arrives before there is anywhere to
         // play it. Rather than swallowing it, wait for the context and then
@@ -241,12 +370,16 @@ export default function App() {
        */
       if (e.code.startsWith('Digit')) {
         const n = Number(e.code.slice(5))
-        if (n >= 1 && n <= ENCODERS.length) {
+        // The digit addresses a knob by its printed number, not by where it
+        // happens to sit in the array — so the array can be reordered without
+        // moving a shortcut.
+        const index = encoderByDigit(n)
+        if (index !== undefined) {
           e.preventDefault()
-          s.setDialFocus(n - 1)
-          // Selecting an encoder opens its list. Pressing the same number again
-          // closes it, so one key both reaches and dismisses.
-          s.setScreenList(s.screenList === n - 1 ? null : n - 1)
+          // Focus is claimed on the way *up*, in `resolveTap`. Taking it here
+          // would mean every tap arrived already focused, and so every tap
+          // would read as a press.
+          startDigitHold(index)
           return
         }
         if (n === 0) {
@@ -260,8 +393,38 @@ export default function App() {
         case 'Minus':
         case 'Equal': {
           e.preventDefault()
-          const encoder = ENCODERS[s.dialFocus]
-          encoder?.turn(s, e.code === 'Minus' ? -1 : 1)
+          const delta = e.code === 'Minus' ? -1 : 1
+          startRepeat(() => turnFocused(delta))
+          break
+        }
+
+        /*
+         * The arrow cluster is the voicing control: left and right walk the
+         * chord through its inversions, up and down choose which of the two
+         * stacked dials you are walking. It reads the way the dials are
+         * physically arranged — Chord above Bass — so the gesture matches the
+         * panel rather than having to be remembered separately.
+         */
+        case 'ArrowLeft':
+        case 'ArrowRight': {
+          e.preventDefault()
+          const delta = e.code === 'ArrowLeft' ? -1 : 1
+          startRepeat(() => {
+            const st = usePanel.getState()
+            const i = encoderById(st.voicingFocus === 'chord' ? 'chordVoicing' : 'bassVoicing')
+            if (i !== undefined) turnEncoder(i, st, delta)
+          })
+          break
+        }
+        case 'ArrowUp':
+        case 'ArrowDown': {
+          e.preventDefault()
+          const which = e.code === 'ArrowUp' ? 'chord' : 'bass'
+          s.setVoicingFocus(which)
+          // Move the panel's focus with it, so the ring on the cap says which
+          // dial the arrows are about to move.
+          const i = encoderById(which === 'chord' ? 'chordVoicing' : 'bassVoicing')
+          if (i !== undefined) s.setDialFocus(i)
           break
         }
         case 'BracketLeft':
@@ -283,7 +446,23 @@ export default function App() {
           e.preventDefault()
           advanceLoop()
           break
+        /*
+         * Root Layout: what the twelve keys mean against a seven-note key.
+         * Chromatic → Correct → Scale, the three answers to the problem
+         * research/04 calls the most consequential in Key Mode.
+         */
+        case 'Slash': {
+          e.preventDefault()
+          s.cycleRootLayout()
+          const next = usePanel.getState()
+          next.showGlance(
+            next.rootMode === 'scale' ? 'Scale' : next.chromatic === 'colour' ? 'Colour' : 'Snap',
+            'Root Layout',
+          )
+          break
+        }
         case 'Escape':
+          s.cancelKeySelect()
           s.setScreenList(null)
           instrument.panic()
           break
@@ -293,19 +472,46 @@ export default function App() {
     const onUp = (e: KeyboardEvent) => {
       const s = usePanel.getState()
       const roots = rootMap(s.rootMode, s.key)
+      if (
+        e.code === 'Minus' ||
+        e.code === 'Equal' ||
+        e.code === 'ArrowLeft' ||
+        e.code === 'ArrowRight'
+      ) {
+        return stopRepeat()
+      }
+
+      if (e.code.startsWith('Digit') && digitHold) {
+        const index = encoderByDigit(Number(e.code.slice(5)))
+        if (index !== undefined && digitHold.index === index) {
+          const tapped = !digitHold.fired
+          stopDigitHold()
+          if (tapped) resolveTap(index, s)
+          return
+        }
+      }
+
       if (e.code in roots) return instrument.release(roots[e.code]!)
       if (e.code in TYPE_KEYS) return s.setHeldType(TYPE_KEYS[e.code]!, false)
       if (e.code in EXTENSION_KEYS) return s.setHeldExtension(EXTENSION_KEYS[e.code]!, false)
     }
 
     const wake = () => void unlock()
-    const onBlur = () => instrument.panic()
+    // Losing focus mid-hold means the keyup never arrives, and a repeat left
+    // running would keep scrolling a list nobody is looking at.
+    const onBlur = () => {
+      stopRepeat()
+      stopDigitHold()
+      instrument.panic()
+    }
 
     window.addEventListener('keydown', onDown)
     window.addEventListener('keyup', onUp)
     window.addEventListener('blur', onBlur)
     window.addEventListener('pointerdown', wake)
     return () => {
+      stopRepeat()
+      stopDigitHold()
       window.removeEventListener('keydown', onDown)
       window.removeEventListener('keyup', onUp)
       window.removeEventListener('blur', onBlur)
@@ -371,6 +577,13 @@ export default function App() {
           <Console />
         </section>
 
+        {/*
+          The voicing dials, between the hands. Not part of the console: this
+          is the control you reach for *while* a chord is sounding, so it sits
+          where the hand holding it already is, not up with the browse knobs.
+        */}
+        <Voicings />
+
         <section className="hand hand-left" aria-label="Chord buttons">
           <Pads legends={legends} />
           {/* The core gesture is not discoverable from looking at it — you have
@@ -378,9 +591,18 @@ export default function App() {
           <p className="hint">
             <span>Hold a pad, press a key</span>
             <span>
-              Encoders <kbd>1</kbd> · turn <kbd>-</kbd>
-              <kbd>=</kbd> · close <kbd>0</kbd> · Octave <kbd>,</kbd>
-              <kbd>.</kbd>
+              Encoders <kbd>1</kbd>–<kbd>8</kbd> · turn <kbd>-</kbd>
+              <kbd>=</kbd> · tap again for on/off · hold to edit · close <kbd>0</kbd>
+            </span>
+            <span>
+              Voicing <kbd>←</kbd>
+              <kbd>→</kbd> · chord/bass <kbd>↑</kbd>
+              <kbd>↓</kbd> · Octave <kbd>,</kbd>
+              <kbd>.</kbd> · Root layout <kbd>/</kbd>
+            </span>
+            <span>
+              Hold a number and turn for its second axis — <kbd>4</kbd>+<kbd>-</kbd>
+              <kbd>=</kbd> transposes
             </span>
             <span>
               Latch <kbd>space</kbd> · Loop <kbd>B</kbd>

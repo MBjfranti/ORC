@@ -57,7 +57,7 @@ interface Props {
    * filled cap with a pointer cut into it rather than an outline, because that
    * is what a moulded knob looks like from above.
    */
-  cap?: 'outline' | 'amber'
+  cap?: 'outline' | 'amber' | 'orange' | 'black'
 }
 
 export const Dial = memo(function Dial({
@@ -122,23 +122,31 @@ export const Dial = memo(function Dial({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onKeyDown={(e) => {
-          if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+          // Stopped as well as prevented: the window handler gives the arrows
+          // to the voicing dials, and a knob that already has keyboard focus
+          // would otherwise turn itself *and* walk the voicing.
+          const handled = () => {
             e.preventDefault()
+            e.stopPropagation()
+          }
+          if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+            handled()
             onTurn(1)
           } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
-            e.preventDefault()
+            handled()
             onTurn(-1)
           } else if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
+            handled()
             if (onClick) onClick()
             else onTurn(clickSteps)
           }
         }}
       >
         <svg viewBox="0 0 40 40" aria-hidden>
-          {cap === 'amber' && (
+          {cap !== 'outline' && (
             <>
-              {/* Body, then the yellow top sitting inside it. */}
+              {/* Body, then the coloured top sitting inside it. Which colour is
+                  a CSS matter — see `[data-cap]` in styles.css. */}
               <circle className="dial-body" cx="20" cy="20" r="15" />
               <circle className="dial-cap" cx="20" cy="20" r="11.5" />
             </>

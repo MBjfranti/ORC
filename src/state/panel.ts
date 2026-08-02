@@ -9,13 +9,19 @@
 
 import { create } from 'zustand'
 
+import { buildChord } from '../core/chord.js'
 import { GRIDS, LOOP_BARS } from '../core/looper.js'
+import { clampVoicing } from '../core/voicing.js'
 import type { Grid } from '../core/looper.js'
 import { PERFORM_MODES } from '../core/performance.js'
 import type { PerformMode } from '../core/performance.js'
 import { MODES } from '../core/types.js'
 import type { ChordType, Extension, Key, Mode, PitchClass } from '../core/types.js'
-import { SOUNDS } from '../engine/sounds.js'
+import { BASS_MODES, BASS_SOUNDS } from '../engine/bass.js'
+import type { BassMode } from '../engine/bass.js'
+import { FX_EXIT_ROW, FX_ROWS, fxSlotAt, prominentFx } from '../engine/fx.js'
+import type { FxId as RackId } from '../engine/fx.js'
+import { SOUNDS, soundAt } from '../engine/sounds.js'
 import type { ChromaticPolicy } from '../core/key.js'
 
 /**
@@ -49,11 +55,36 @@ export interface PanelState {
   key: Key
   chromatic: ChromaticPolicy
   rootMode: RootMode
+  /**
+   * Semitones every played root is shifted by — Key's press-and-turn axis
+   * (research/13 §B.7, §9.4).
+   *
+   * Applied to the root rather than to the finished notes, so the chord you
+   * see is the chord you hear: transposing up two and pressing C really is a D
+   * chord, not a C chord playing D's pitches.
+   */
+  transpose: number
+  /**
+   * The quick key select prompt is up (§9.2).
+   *
+   * Not a list — the display shows the words `select key` and a keyboard, and
+   * you dismiss it by *playing* the root you want, holding `Min` for a minor
+   * key. So it is a mode the keybed is in, not a menu with a cursor.
+   */
+  keySelect: boolean
 
   // --- voicing ---
   /** Position along the infinite note stack. Unbounded and signed. */
   voicing: number
   octave: number
+  /**
+   * Which of the two voicing dials the arrow keys drive.
+   *
+   * Stored as which dial rather than as an encoder index, so the state layer
+   * does not have to know anything about the panel's layout — `encoders.ts`
+   * already imports from here, and the reverse would close the loop.
+   */
+  voicingFocus: 'chord' | 'bass'
   /** Follow the previous chord instead of jumping to an absolute position. */
   voiceLead: boolean
 
@@ -81,8 +112,36 @@ export interface PanelState {
   reverb: number
   delay: number
   volume: number
+  /**
+   * The FX rack's menu, which is the only two-state control on the panel:
+   * turning browses until you press, and then turning adjusts (research/13
+   * §B.4, quoting §8.2).
+   */
+  fxCursor: number
+  fxAdjusting: boolean
+  /**
+   * FX lock (§8.3), set by holding the encoder and shown on its LED.
+   *
+   * Locked, the rack survives a change of sound. Unlocked, a new sound brings
+   * its own effects with it — which is what makes the library's per-preset
+   * reverb, chorus and delay levels mean anything.
+   */
+  fxLock: boolean
+  /**
+   * Perform's half of the same machine as FX, and its lock (§7.3).
+   *
+   * The lock is real on the panel and inert underneath for now: it exists so
+   * that browsing sounds keeps the articulation, and our presets do not carry
+   * one to lose. It will start mattering the moment they do.
+   */
+  performAdjusting: boolean
+  performLock: boolean
   bassOn: boolean
   bassLevel: number
+  /** Which bass sound, numbered independently of the treble list. */
+  bassIndex: number
+  /** How the bass responds to what you play — see `BASS_MODES`. */
+  bassMode: BassMode
 
   // --- looper ---
   /** Length of the next recording. `null` records until you stop it. */
@@ -105,6 +164,30 @@ export interface PanelState {
    * for, and it is why the panel prints the number under each knob.
    */
   screenList: number | null
+  /**
+   * The transient value readout (research/13 §C.3, measured).
+   *
+   * Turning a dial raises a giant number over whatever the screen was showing,
+   * and it drops away again about 1.2 seconds after the last turn. The stamp is
+   * what lets a repeated turn re-arm that timer even when the value it is
+   * showing has not changed.
+   */
+  glance: {
+    value: string
+    label: string
+    level?: number | undefined
+    /**
+     * Raised by a press-and-turn rather than a plain turn.
+     *
+     * The display marks the difference with a solid inverted footer bar —
+     * measured on the manual's only two press-and-turn readouts, Bass Volume
+     * and Transpose (research/13 §C.3). It gives the secondary axis a signature
+     * of its own, so you can see you are editing the hidden parameter and not
+     * the obvious one.
+     */
+    secondary?: boolean | undefined
+    stamp: number
+  } | null
 
   /** Held chords keep sounding after the hands leave. */
   latched: boolean
@@ -120,8 +203,15 @@ export interface PanelState {
   cycleMode: (delta: number) => void
   setChromatic: (policy: ChromaticPolicy) => void
   setRootMode: (mode: RootMode) => void
+  cycleRootLayout: () => void
+  nudgeTranspose: (delta: number) => void
+  openKeySelect: () => void
+  /** Answer the prompt by playing a root. `minor` when the Min pad is held. */
+  pickKey: (root: PitchClass, minor: boolean) => void
+  cancelKeySelect: () => void
 
   nudgeVoicing: (delta: number) => void
+  setVoicingFocus: (which: 'chord' | 'bass') => void
   setVoicing: (position: number) => void
   nudgeOctave: (delta: number) => void
   toggleVoiceLead: () => void
@@ -130,6 +220,8 @@ export interface PanelState {
   cyclePerformMode: (delta: number) => void
   setPerformAmount: (amount: number) => void
   togglePerform: () => void
+  pressPerform: () => void
+  togglePerformLock: () => void
   setBpm: (bpm: number) => void
 
   setSound: (index: number) => void
@@ -138,6 +230,12 @@ export interface PanelState {
   cycleFx: (delta: number) => void
   /** Set whichever effect the dial is currently pointing at. */
   nudgeFxAmount: (delta: number) => void
+  moveFxCursor: (delta: number) => void
+  pressFx: () => void
+  toggleFxLock: () => void
+  setFxAmount: (id: RackId, value: number) => void
+  nudgeFxSelected: (delta: number) => void
+  nudgeFxProminent: (delta: number) => void
   setCutoff: (n: number) => void
   setChorus: (n: number) => void
   setReverb: (n: number) => void
@@ -145,14 +243,80 @@ export interface PanelState {
   setVolume: (n: number) => void
   toggleBass: () => void
   setBassLevel: (n: number) => void
+  setBassSound: (index: number) => void
+  cycleBassSound: (delta: number) => void
+  setBassMode: (mode: BassMode) => void
+  cycleBassMode: (delta: number) => void
   cycleLoopBars: (delta: number) => void
   setLoopGrid: (grid: Grid) => void
   toggleLatch: () => void
   setDialFocus: (index: number) => void
   setScreenList: (index: number | null) => void
+  showGlance: (value: string, label: string, level?: number, secondary?: boolean) => void
+  clearGlance: () => void
 }
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
+
+/**
+ * Where each rack slot's amount actually lives.
+ *
+ * The four we have were already fields on this store, wired through to the
+ * synth, so the rack reads and writes them rather than duplicating them into a
+ * map that would then need keeping in step.
+ */
+export function fxAmountOf(s: PanelState, id: RackId): number {
+  switch (id) {
+    case 'reverb':
+      return s.reverb
+    case 'chorus':
+      return s.chorus
+    case 'delay':
+      return s.delay
+    case 'filter':
+      return s.cutoff
+    default:
+      return 0
+  }
+}
+
+/**
+ * Load a sound, and let it bring its own effects with it.
+ *
+ * Every preset in the library carries a reverb, chorus and delay level chosen
+ * so it arrives playable without touching a knob — and until now nothing read
+ * them. FX lock is what makes that safe to do: locked, the rack you have built
+ * survives a change of sound, which is the whole point of the lock (§8.3).
+ *
+ * The filter is deliberately not reset. It is the Colour macro, centred on
+ * whatever the preset's own cutoff is, so 0.5 already means "as designed" on
+ * every sound — moving it here would fight the synth's own centring.
+ */
+function loadSound(s: PanelState, soundIndex: number): Partial<PanelState> {
+  if (s.fxLock) return { soundIndex }
+  const sound = soundAt(soundIndex)
+  return {
+    soundIndex,
+    reverb: clamp01(sound.reverb),
+    chorus: clamp01(sound.chorus),
+    delay: clamp01(sound.delay),
+  }
+}
+
+const fxPatch = (id: RackId, value: number): Partial<PanelState> => {
+  switch (id) {
+    case 'reverb':
+      return { reverb: value }
+    case 'chorus':
+      return { chorus: value }
+    case 'delay':
+      return { delay: value }
+    case 'filter':
+      return { cutoff: value }
+    default:
+      return {}
+  }
+}
 
 /** Step an index, stopping at the ends rather than wrapping. */
 const clampIndex = (count: number, i: number, delta: number) =>
@@ -166,9 +330,12 @@ export const usePanel = create<PanelState>((set) => ({
   key: { tonic: 0, mode: 'ionian' },
   chromatic: 'colour',
   rootMode: 'chromatic',
+  transpose: 0,
+  keySelect: false,
 
   voicing: 0,
   octave: 3,
+  voicingFocus: 'chord',
   voiceLead: true,
 
   performMode: 'off',
@@ -183,14 +350,22 @@ export const usePanel = create<PanelState>((set) => ({
   reverb: 0.22,
   delay: 0,
   volume: 0.75,
+  fxCursor: 1, // Reverb — the first real row, as PDF p12 shows it
+  fxAdjusting: false,
+  fxLock: false,
+  performAdjusting: false,
+  performLock: false,
   bassOn: true,
   bassLevel: 0.8,
+  bassIndex: 3, // 04 PBass — the plainest of the documented names
+  bassMode: 'chords',
 
   loopBars: 4,
   loopGrid: 'off',
 
   dialFocus: 0,
   screenList: null,
+  glance: null,
   latched: false,
 
   setHeldType: (type, held) =>
@@ -231,7 +406,59 @@ export const usePanel = create<PanelState>((set) => ({
   setChromatic: (chromatic) => set({ chromatic }),
   setRootMode: (rootMode) => set({ rootMode }),
 
-  nudgeVoicing: (delta) => set((s) => ({ voicing: s.voicing + delta })),
+  /**
+   * The Root Layout switch: what the twelve keys mean against a seven-note key.
+   *
+   * Three positions, because a twelve-key keyboard against a seven-note scale
+   * leaves five keys with no diatonic answer and the choice is the single most
+   * consequential one in Key Mode (research/04). Two fields hold it — the
+   * layout of the keybed and the policy for out-of-scale roots — so the switch
+   * walks them together rather than exposing both.
+   *
+   *   Chromatic  twelve keys, out-of-key roots get borrowed harmony
+   *   Correct    twelve keys, out-of-key roots snap to the nearest degree
+   *   Scale      seven keys, and nothing you play can be out of key
+   */
+  /** Transpose, a semitone at a time. Two octaves either way is plenty. */
+  nudgeTranspose: (delta) =>
+    set((s) => ({ transpose: Math.max(-24, Math.min(24, s.transpose + delta)) })),
+
+  openKeySelect: () => set({ keySelect: true }),
+  cancelKeySelect: () => set({ keySelect: false }),
+
+  /*
+   * Spell the key with the chord grammar you already know — hold `Min` and
+   * play C to get C minor — rather than scrolling eighty-four entries.
+   * Answering the prompt also switches Key Mode on: you did not go looking for
+   * a key in order to leave it off.
+   */
+  pickKey: (root, minor) =>
+    set({ key: { tonic: root, mode: minor ? 'aeolian' : 'ionian' }, keySelect: false, keyMode: true }),
+
+  cycleRootLayout: () =>
+    set((s) => {
+      if (s.rootMode === 'scale') return { rootMode: 'chromatic', chromatic: 'colour' }
+      if (s.chromatic === 'colour') return { rootMode: 'chromatic', chromatic: 'snap' }
+      return { rootMode: 'scale', chromatic: 'snap' }
+    }),
+
+  /*
+   * Clamped against the chord currently under the hands, so the dial stops
+   * where the keyboard does rather than counting on into silence.
+   *
+   * The reference root is C: the real root moves the window by less than an
+   * octave, which the range's own margins absorb, and reaching for the pressed
+   * key here would drag the whole play path into the store for no audible gain.
+   */
+  nudgeVoicing: (delta) =>
+    set((s) => {
+      const type = s.heldTypes[s.heldTypes.length - 1] ?? 'maj'
+      const intervals = buildChord({ root: 0, type, extensions: s.heldExtensions })
+      return {
+        voicing: clampVoicing(intervals, 12 * (s.octave + 1), s.voicing + delta),
+      }
+    }),
+  setVoicingFocus: (voicingFocus) => set({ voicingFocus }),
   setVoicing: (voicing) => set({ voicing }),
   nudgeOctave: (delta) => set((s) => ({ octave: Math.max(1, Math.min(6, s.octave + delta)) })),
   toggleVoiceLead: () => set((s) => ({ voiceLead: !s.voiceLead })),
@@ -245,12 +472,23 @@ export const usePanel = create<PanelState>((set) => ({
     })),
   setPerformAmount: (amount) => set({ performAmount: clamp01(amount) }),
   togglePerform: () => set((s) => ({ performOn: !s.performOn })),
+
+  /**
+   * The press, in Perform's two states.
+   *
+   * `Off` is a mode rather than a row you commit to — selecting it is already
+   * the whole gesture, so there is nothing to adjust and dropping into ADJUST
+   * would leave the knob turning a parameter that does not exist.
+   */
+  pressPerform: () =>
+    set((s) => (s.performMode === 'off' ? { performAdjusting: false } : { performAdjusting: !s.performAdjusting })),
+  togglePerformLock: () => set((s) => ({ performLock: !s.performLock })),
   setBpm: (bpm) => set({ bpm: Math.max(40, Math.min(220, Math.round(bpm))) }),
 
   setSound: (soundIndex) =>
-    set({ soundIndex: Math.max(0, Math.min(SOUNDS.length - 1, soundIndex)) }),
+    set((s) => loadSound(s, Math.max(0, Math.min(SOUNDS.length - 1, soundIndex)))),
   cycleSound: (delta) =>
-    set((s) => ({ soundIndex: clampIndex(SOUNDS.length, s.soundIndex, delta) })),
+    set((s) => loadSound(s, clampIndex(SOUNDS.length, s.soundIndex, delta))),
   setFx: (fx) => set({ fx }),
   cycleFx: (delta) =>
     set((s) => ({ fx: FX_IDS[clampIndex(FX_IDS.length, FX_IDS.indexOf(s.fx), delta)] as FxId })),
@@ -268,12 +506,66 @@ export const usePanel = create<PanelState>((set) => ({
           return { reverb: clamp01(s.reverb + step) }
       }
     }),
+
+  // --- the FX rack ---------------------------------------------------------
+
+  /** Move the menu cursor. Clamps: PDF p12 shows a blank row above `Exit`. */
+  moveFxCursor: (delta) =>
+    set((s) => ({ fxCursor: Math.max(0, Math.min(FX_ROWS - 1, s.fxCursor + delta)) })),
+
+  /**
+   * The press, which means different things in the machine's two states.
+   *
+   * On `Exit` it closes the menu, because `Exit` is a row you choose rather
+   * than a gesture you make (research/13 §B.5). Otherwise it drops into ADJUST,
+   * or comes back out of it.
+   */
+  pressFx: () =>
+    set((s) => {
+      if (s.fxCursor === FX_EXIT_ROW) return { screenList: null, fxAdjusting: false }
+      const slot = fxSlotAt(s.fxCursor)
+      // Nothing to adjust on a row we have not built.
+      if (!slot?.built) return { fxAdjusting: false }
+      return { fxAdjusting: !s.fxAdjusting }
+    }),
+
+  toggleFxLock: () => set((s) => ({ fxLock: !s.fxLock })),
+
+  setFxAmount: (id, value) => set(fxPatch(id, clamp01(value))),
+
+  nudgeFxSelected: (delta) =>
+    set((s) => {
+      const slot = fxSlotAt(s.fxCursor)
+      if (!slot?.built) return {}
+      return fxPatch(slot.id, clamp01(fxAmountOf(s, slot.id) + delta * 0.02))
+    }),
+
+  /**
+   * The dial's resting behaviour, before the menu is ever opened.
+   *
+   * > "By default, the FX Dial will automatically increase and decrease the
+   * > most prominent effect of the currently selected sound." — §8.2
+   */
+  nudgeFxProminent: (delta) =>
+    set((s) => {
+      const id = prominentFx(soundAt(s.soundIndex))
+      return fxPatch(id, clamp01(fxAmountOf(s, id) + delta * 0.02))
+    }),
   setCutoff: (n) => set({ cutoff: clamp01(n) }),
   setChorus: (n) => set({ chorus: clamp01(n) }),
   setReverb: (n) => set({ reverb: clamp01(n) }),
   setDelay: (n) => set({ delay: clamp01(n) }),
   setVolume: (n) => set({ volume: clamp01(n) }),
   toggleBass: () => set((s) => ({ bassOn: !s.bassOn })),
+  setBassSound: (bassIndex) =>
+    set({ bassIndex: Math.max(0, Math.min(BASS_SOUNDS.length - 1, bassIndex)) }),
+  cycleBassSound: (delta) =>
+    set((s) => ({ bassIndex: clampIndex(BASS_SOUNDS.length, s.bassIndex, delta) })),
+  setBassMode: (bassMode) => set({ bassMode }),
+  cycleBassMode: (delta) =>
+    set((s) => ({
+      bassMode: BASS_MODES[clampIndex(BASS_MODES.length, BASS_MODES.indexOf(s.bassMode), delta)]!,
+    })),
   cycleLoopBars: (delta) =>
     set((s) => ({
       loopBars: LOOP_BARS[
@@ -284,7 +576,23 @@ export const usePanel = create<PanelState>((set) => ({
   setBassLevel: (n) => set({ bassLevel: clamp01(n) }),
   toggleLatch: () => set((s) => ({ latched: !s.latched })),
   setDialFocus: (dialFocus) => set({ dialFocus }),
-  setScreenList: (screenList) => set({ screenList }),
+  /*
+   * Closing the display drops the FX rack back to browsing.
+   *
+   * Otherwise leaving mid-adjust and coming back later lands you in a state you
+   * did not choose, and the next turn sets a level when you meant to move.
+   * Only on a full close — reopening the same menu has to preserve the state,
+   * or the press that toggles adjust would clear it on the way in.
+   */
+  setScreenList: (screenList) =>
+    set(
+      screenList === null
+        ? { screenList, fxAdjusting: false, performAdjusting: false }
+        : { screenList },
+    ),
+  showGlance: (value, label, level, secondary) =>
+    set({ glance: { value, label, level, secondary, stamp: performance.now() } }),
+  clearGlance: () => set({ glance: null }),
 }))
 
 /** Which pitch class each physical key plays, given the current layout. */

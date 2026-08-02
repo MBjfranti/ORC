@@ -23,10 +23,63 @@
 import type { MidiNote } from './types.js'
 
 /**
+ * The pitch range the voicing window may travel through.
+ *
+ * The dial "expands the range of the keyboard well beyond a single octave —
+ * turn it to move up and down **the full range of the keyboard**"
+ * (research/05, [OFFICIAL]). So it is bounded by the instrument, not infinite:
+ * a keyboard has ends, and running past them would only pile notes up outside
+ * hearing while the readout kept counting.
+ *
+ * A piano's span. Chords much below C1 are mud and much above C8 are whistles,
+ * and the bass has its own engine for the bottom.
+ */
+export const VOICING_LOW = 24 // C1
+export const VOICING_HIGH = 108 // C8
+
+/**
+ * How far the window may slide, in positions, for this chord.
+ *
+ * Expressed as whole octave shifts and then converted, which is what keeps the
+ * instrument's documented quirk intact: the travel is a fixed number of
+ * *octaves*, so the number of clicks it takes scales with the chord's note
+ * count — three for a triad, four for a seventh, five for a ninth. Bounding the
+ * position directly would have made a ninth travel further than a triad.
+ */
+export function voicingRange(
+  intervals: readonly number[],
+  rootMidi: MidiNote,
+): { min: number; max: number } {
+  const n = intervals.length
+  if (n === 0) return { min: 0, max: 0 }
+  const top = intervals[n - 1]!
+
+  // The window spans one full cycle, so it occupies the octave at `shift` and
+  // reaches into the one above it.
+  const lowestShift = Math.ceil((VOICING_LOW - rootMidi) / 12)
+  const highestShift = Math.floor((VOICING_HIGH - rootMidi - top) / 12) - 1
+
+  // A root already outside the range leaves nowhere to go; stay put rather
+  // than invert the bounds.
+  if (highestShift < lowestShift) return { min: 0, max: 0 }
+  return { min: lowestShift * n, max: highestShift * n + (n - 1) }
+}
+
+/** Hold a position inside what this chord can actually reach. */
+export function clampVoicing(
+  intervals: readonly number[],
+  rootMidi: MidiNote,
+  position: number,
+): number {
+  const { min, max } = voicingRange(intervals, rootMidi)
+  return Math.max(min, Math.min(max, position))
+}
+
+/**
  * Voice `intervals` (ascending, from a root) as `count` sounding notes.
  *
- * `position` is unbounded and signed — it is a place on the keyboard, not an
- * inversion number, and there is deliberately no "home".
+ * `position` is signed and has no "home" — it is a place on the keyboard rather
+ * than an inversion number. It *is* bounded, though: see `voicingRange`.
  */
 export function voiceChord(
   intervals: readonly number[],

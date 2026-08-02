@@ -28,6 +28,7 @@
 import { buildChord } from '../core/chord.js'
 import { isCycle, performChord } from '../core/performance.js'
 import { resolveChord, resolveSingleNote } from '../core/resolve.js'
+import { routeKeypress } from './bass.js'
 import type { Resolved } from '../core/resolve.js'
 import type { MidiNote, PitchClass } from '../core/types.js'
 import { nearestPosition } from '../core/voicing.js'
@@ -182,19 +183,27 @@ export class Instrument {
     const mode = s.performOn ? s.performMode : 'off'
     const articulation = performChord(notes, mode, { amount: s.performAmount, bpm: s.bpm })
 
-    /*
-     * A running arpeggio keeps its rhythm across a chord change. Restarting the
-     * loop on every root is what makes a progression stutter back to step one
-     * and drift off the beat — the notes should change underneath the groove,
-     * not interrupt it.
-     */
-    const moved =
-      this.currentRoot !== undefined &&
-      this.player.moveCycle(this.currentRoot, root, articulation)
+    // Which engines this press reaches — see `routeKeypress` for why a
+    // switched-off bass puts the treble back rather than muting everything.
+    const routing = routeKeypress(s.bassOn, s.bassMode, resolved !== undefined)
 
-    if (!moved) {
+    if (routing.treble) {
+      /*
+       * A running arpeggio keeps its rhythm across a chord change. Restarting
+       * the loop on every root is what makes a progression stutter back to step
+       * one and drift off the beat — the notes should change underneath the
+       * groove, not interrupt it.
+       */
+      const moved =
+        this.currentRoot !== undefined &&
+        this.player.moveCycle(this.currentRoot, root, articulation)
+
+      if (!moved) {
+        this.player.stopAll()
+        this.player.start(root, articulation)
+      }
+    } else {
       this.player.stopAll()
-      this.player.start(root, articulation)
     }
     this.currentRoot = root
 
@@ -203,10 +212,11 @@ export class Instrument {
     if (import.meta.env.DEV) latency.push(performance.now() - t0)
 
     let bass: MidiNote | undefined
-    if (s.bassOn && resolved) {
+    if (routing.bass) {
       // Two octaves under the chord's own root, so it anchors without muddying
-      // the voicing above it.
-      bass = 12 * (s.octave - 1) + resolved.spec.root
+      // the voicing above it. With no chord held there is no `resolved` to take
+      // a root from, so the key you pressed *is* the root.
+      bass = 12 * (s.octave - 1) + (resolved ? resolved.spec.root : root)
       this.synth.bassOn(bass)
       this.looper.captureOn(bass, 0.85, 'bass')
     }
@@ -244,6 +254,7 @@ export class Instrument {
       chromatic: s.chromatic,
       octave: s.octave,
       voicing: s.voicing,
+      transpose: s.transpose,
     }
 
     if (!s.voiceLead || !previous) return resolveChord(input)
@@ -271,6 +282,8 @@ export class Instrument {
     if (root === undefined) return
 
     const resolved = resolveChord({
+      // Already transposed once when it was resolved, so re-colouring must not
+      // shift it again — this root is an outcome, not a key that was pressed.
       root: held.spec.root,
       types: s.heldTypes,
       extensions: s.heldExtensions,

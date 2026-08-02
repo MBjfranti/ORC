@@ -9,7 +9,7 @@ import { buildChord, chordName } from './chord.js'
 import { chordForRoot } from './key.js'
 import { noteName } from './spelling.js'
 import { mod12 } from './types.js'
-import { voiceChord } from './voicing.js'
+import { clampVoicing, voiceChord } from './voicing.js'
 import type { ChromaticPolicy } from './key.js'
 import type { ChordSpec, ChordType, Extension, Key, MidiNote, PitchClass } from './types.js'
 
@@ -25,6 +25,8 @@ export interface ResolveInput {
   readonly octave: number
   /** Position along the infinite note stack. */
   readonly voicing: number
+  /** Semitones to shift the played root by, from Key's press-and-turn axis. */
+  readonly transpose?: number
 }
 
 export interface Resolved {
@@ -52,7 +54,19 @@ export interface Resolved {
  * key of the keybed, so it runs twelve times per render.
  */
 export function resolveChord(input: ResolveInput): Resolved | undefined {
-  const { root, types, extensions, keyMode, key, octave, voicing } = input
+  const { types, extensions, keyMode, key, voicing } = input
+
+  /*
+   * Transpose shifts the *root you played*, not the notes that come out.
+   *
+   * Doing it to the finished pitches would be simpler and would lie: the
+   * display would still say C while a D chord sounded. Shifting the root keeps
+   * the name, the roman numeral and the audio all describing the same chord —
+   * and any semitones that carry past an octave move the register with them.
+   */
+  const shifted = input.root + (input.transpose ?? 0)
+  const root = mod12(shifted) as PitchClass
+  const octave = input.octave + Math.floor(shifted / 12)
 
   let type: ChordType
   let actualRoot = root
@@ -82,7 +96,12 @@ export function resolveChord(input: ResolveInput): Resolved | undefined {
 
   const spec: ChordSpec = { root: actualRoot, type, extensions }
   const intervals = buildChord(spec)
-  const notes = voiceChord(intervals, 12 * (octave + 1) + actualRoot, voicing)
+  const rootMidi = 12 * (octave + 1) + actualRoot
+  // Clamped here as well as at the dial, because dropping an extension shrinks
+  // the cycle and so *raises* the same position by an octave or more. The
+  // manual calls that shifting-goalposts behaviour intentional; flying off the
+  // end of the keyboard because of it is not.
+  const notes = voiceChord(intervals, rootMidi, clampVoicing(intervals, rootMidi, voicing))
   const name = chordName(spec)
 
   return {

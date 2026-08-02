@@ -37,7 +37,21 @@ export interface Row {
   /** Left-hand text. Numbers are part of it, as the panel prints them. */
   readonly label: string
   /** Right-aligned column, for lists that carry a value. */
-  readonly value?: string
+  readonly value?: string | undefined
+  /**
+   * The value is being *edited*, not merely shown.
+   *
+   * FX is a two-state control — turning either moves the cursor or changes the
+   * number, and the manual never says how the screen distinguishes them. It
+   * has to: otherwise both states look identical until you turn something, and
+   * guessing wrong moves the cursor when you meant to set a level.
+   *
+   * Drawn as a knocked-out chip on the value alone, inside the row's own
+   * inversion. **Inferred** — but the display already uses inversion to mark a
+   * secondary axis on the press-and-turn readouts (research/13 §C.3), so it is
+   * borrowing the panel's own vocabulary rather than inventing one.
+   */
+  readonly editing?: boolean | undefined
 }
 
 export const ScreenList = memo(function ScreenList({
@@ -68,7 +82,11 @@ export const ScreenList = memo(function ScreenList({
             data-sel={slot === CURSOR_ROW}
           >
             <span className="scr-row-label">{row.label}</span>
-            {row.value && <span className="scr-row-value">{row.value}</span>}
+            {row.value && (
+              <span className="scr-row-value" data-editing={row.editing === true}>
+                {row.value}
+              </span>
+            )}
           </div>
         )
       })}

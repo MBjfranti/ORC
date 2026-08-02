@@ -22,7 +22,7 @@
  * to say "this is a display".
  */
 
-import { memo } from 'react'
+import { memo, useCallback, useEffect, useRef } from 'react'
 
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
 import { barsLabel } from '../core/looper.js'
@@ -32,7 +32,17 @@ import { soundNumber, SOUNDS } from '../engine/sounds.js'
 import { FX_IDS, FX_LABEL, usePanel } from '../state/panel.js'
 import type { FxId } from '../state/panel.js'
 import { Dial } from './Dial.js'
-import { ENCODERS, encoderLegend } from './encoders.js'
+import {
+  BASS_MODE_LIST,
+  columnIndices,
+  ENCODERS,
+  encoderLegend,
+  isPlaceholder,
+  rowIndices,
+  SCREEN_AFTER,
+  screenRows,
+  turnEncoder,
+} from './encoders.js'
 import { ScreenList } from './ScreenList.js'
 
 /**
@@ -67,11 +77,14 @@ export const Console = memo(function Console() {
   return (
     <div className="console" role="group" aria-label="Sound controls">
       {/*
-        Sound: the encoder alone, with no screen of its own. The summary already
-        reports which sound is loaded, so a second readout beside the knob would
-        say the same thing twice.
+        The row, split around the screen. Nine encoders in the order Telepathic
+        give them, four to the left and five to the right, each with no readout
+        of its own — the screen in the middle is the readout, and whichever knob
+        you reach for takes it over.
       */}
-      {SHOW.sound && <EncoderUnit index={0} />}
+      <EncoderBank indices={rowIndices.slice(0, SCREEN_AFTER)} />
+      <StatScreen />
+      <EncoderBank indices={rowIndices.slice(SCREEN_AFTER)} />
 
               {/*
           Perform is the one section with both kinds of control, because it has
@@ -128,9 +141,6 @@ export const Console = memo(function Console() {
           <ValueScreen value={level(fxAmount[s.fx])} caption={FX_LABEL[s.fx]} />
         </Unit>
       )}
-
-      <StatScreen />
-
 
               {/* Key: one encoder through every key the instrument offers, with the
             name on a small screen. A dial with legends could not hold 84 of
@@ -244,23 +254,122 @@ function Switch({ label, on, onToggle }: { label: string; on: boolean; onToggle:
  * `Sound (1)`. Focus is shown on the cap rather than as a separate indicator,
  * because the cap is the thing your eye is already on.
  */
+/** A run of encoders, kept together so the screen sits between two banks. */
+function EncoderBank({ indices }: { indices: number[] }) {
+  const shown = indices.filter((i) => ENCODERS[i]!.shown)
+  if (shown.length === 0) return null
+  return (
+    <div className="encoder-bank">
+      {shown.map((i) => (
+        <EncoderUnit key={ENCODERS[i]!.id} index={i} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The two voicing dials, stacked between the hands.
+ *
+ * Its own export because it does not belong to the console — it sits in the
+ * lower half, between the pads and the keybed, where the hand holding a chord
+ * can reach it without leaving the chord.
+ */
+export const Voicings = memo(function Voicings() {
+  const shown = columnIndices.filter((i) => ENCODERS[i]!.shown)
+  if (shown.length === 0) return null
+  return (
+    <div className="voicings" role="group" aria-label="Voicing">
+      {shown.map((i) => (
+        <EncoderUnit key={ENCODERS[i]!.id} index={i} />
+      ))}
+    </div>
+  )
+})
+
 function EncoderUnit({ index }: { index: number }) {
   const encoder = ENCODERS[index]!
   const focused = usePanel((s) => s.dialFocus === index)
   const setDialFocus = usePanel((s) => s.setDialFocus)
+  const bassOn = usePanel((s) => s.bassOn)
   const state = usePanel()
 
+  /*
+   * Press and hold opens the encoder's menu. The hardware hides a lot behind
+   * this gesture and it is the source of the "menu diving" complaint
+   * (research/02), so it is worth it being the *only* hidden thing: a hold
+   * opens a list, and the list is then visible and turnable like any other.
+   *
+   * The hold has to cancel the click, or letting go would fire both — on Bass
+   * that would open the menu and switch the engine off on the way out.
+   */
+  const fired = useRef(false)
+  const timer = useRef<number | undefined>(undefined)
+
+  const startHold = useCallback(() => {
+    setDialFocus(index)
+    fired.current = false
+    if (!encoder.hold) return
+    timer.current = window.setTimeout(() => {
+      fired.current = true
+      encoder.hold!(usePanel.getState())
+    }, 550)
+  }, [encoder, index, setDialFocus])
+
+  const endHold = useCallback(() => {
+    if (timer.current !== undefined) window.clearTimeout(timer.current)
+    timer.current = undefined
+  }, [])
+
+  useEffect(() => endHold, [endHold])
+
+  // The bass engine can be switched off from its own knob, so the cap says so.
+  const off = encoder.id === 'bass' && !bassOn
+  const pending = isPlaceholder(encoder)
+
   return (
-    <div className="encoder" data-focus={focused} onPointerDown={() => setDialFocus(index)}>
+    <div
+      className="encoder"
+      data-focus={focused}
+      data-off={off}
+      data-pending={pending}
+      data-size={encoder.size ?? 'md'}
+      onPointerDown={startHold}
+      onPointerUp={endHold}
+      onPointerCancel={endHold}
+      onPointerLeave={endHold}
+    >
       <Dial
         label={encoder.label}
         readout=""
         bare
-        cap="amber"
-        onTurn={(d) => encoder.turn(state, d)}
-        onClick={encoder.press ? () => encoder.press!(state) : undefined}
+        cap={encoder.cap}
+        onTurn={(d) => turnEncoder(index, usePanel.getState(), d)}
+        onClick={
+          encoder.press
+            ? () => {
+                if (fired.current) {
+                  fired.current = false
+                  return
+                }
+                encoder.press!(usePanel.getState())
+              }
+            : undefined
+        }
         sensitivity={encoder.sensitivity ?? 6}
       />
+      {encoder.lamp && (
+        <span
+          className="encoder-lamp"
+          data-on={encoder.lamp(state)}
+          data-kind={encoder.lampKind ?? 'power'}
+          role="img"
+          aria-label={
+            encoder.lampKind === 'lock'
+              ? `${encoder.label} ${encoder.lamp(state) ? 'locked' : 'unlocked'}`
+              : `${encoder.label} ${encoder.lamp(state) ? 'on' : 'off'}`
+          }
+        />
+      )}
       <span className="encoder-legend">{encoderLegend(index)}</span>
     </div>
   )
@@ -288,20 +397,162 @@ function Unit({ label, children }: { label: string; children: React.ReactNode })
  * the screen is for while your hand is on a knob.
  */
 function StatScreen() {
-  const open = usePanel((st) => st.screenList)
-  const soundIndex = usePanel((st) => st.soundIndex)
+  const s = usePanel()
+  const view = screenRows(s.screenList, s)
+  const glance = s.glance
+  const clearGlance = s.clearGlance
 
-  if (open === null) {
+  /*
+   * The glance is the only thing on this screen that expires. Menus and lists
+   * are sticky — they are somewhere you are, and they stay until you leave
+   * (research/13 §B.6). A value readout is feedback on a turn, so it gets out
+   * of the way on its own.
+   *
+   * Keyed on the stamp rather than the value, so turning a dial back to a
+   * number it was already showing still re-arms the timer.
+   */
+  useEffect(() => {
+    if (!glance) return
+    const timer = window.setTimeout(clearGlance, GLANCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [glance?.stamp, glance, clearGlance])
+
+  /*
+   * The quick key select prompt outranks everything, because it is the one
+   * screen that is *waiting on you* — the keybed is in a different mode until
+   * it is answered, and hiding that behind a glance would be a trap (§9.2).
+   */
+  if (s.keySelect) {
+    return (
+      <div className="screen screen-stat" role="status" aria-label="Select key">
+        <ScreenPrompt />
+      </div>
+    )
+  }
+
+  if (glance) {
+    return (
+      <div className="screen screen-stat" role="status" aria-label={`${glance.label} ${glance.value}`}>
+        <ScreenValue
+          value={glance.value}
+          label={glance.label}
+          level={glance.level}
+          secondary={glance.secondary}
+        />
+      </div>
+    )
+  }
+
+  if (!view) {
     return <div className="screen screen-stat" role="status" aria-label="Display" />
   }
 
-  // Only Sound has a list so far; the rest arrive as their encoders do.
+  const label =
+    s.screenList === BASS_MODE_LIST ? 'Bass plays' : (ENCODERS[s.screenList!]?.label ?? 'Display')
+
   return (
-    <div className="screen screen-stat" role="status" aria-label={ENCODERS[open]?.label}>
-      <ScreenList
-        rows={SOUNDS.map((sound, i) => ({ label: `${soundNumber(i)} ${sound.name}` }))}
-        cursor={soundIndex}
-      />
+    <div className="screen screen-stat" role="status" aria-label={label}>
+      <ScreenList rows={view.rows} cursor={view.cursor} />
+    </div>
+  )
+}
+
+/** How long a value readout stays up after the last turn. research/13 §B.6. */
+const GLANCE_MS = 1200
+
+/**
+ * The value readout, as the hardware draws it (research/13 §C.3, measured).
+ *
+ * A giant number filling 84% of the panel with its label along the bottom. Every
+ * number below is off the framebuffer illustrations rather than chosen: the
+ * value field is 108 of the 128 pixels, the label sits at y 114–124 with the
+ * same 11px cap height the list rows use, and the two are separated by a 2px
+ * gap and nothing else.
+ *
+ * `level` fills the numeral field from the bottom and knocks the digits out
+ * where it crosses them. `difference` is the honest way to do a 1-bit XOR:
+ * white over white goes black, white over black stays white — which is exactly
+ * what the Bass Volume illustration shows.
+ */
+/**
+ * The quick key select prompt (§9.2, research/13 §M4).
+ *
+ * Not a list — "long press the Key Dial until **select key** and keyboard
+ * appears on the display", and you answer it by *playing* the root rather than
+ * by choosing a row. The keyboard graphic is the instruction: it says where to
+ * look next.
+ *
+ * Drawn as one octave, black keys in their real positions, at the panel's own
+ * pixel. No octave number on it — v3.90 removed one that used to be there, and
+ * it was right to: the prompt wants a pitch class, not a note.
+ */
+function ScreenPrompt() {
+  /*
+   * A black key sits on the *boundary between two white keys*, not at its own
+   * share of twelve — which is why they group two-then-three, with gaps at
+   * E–F and B–C. Positioning them by pitch class over twelve spreads them
+   * evenly and stops looking like a keyboard at all.
+   */
+  const BLACK = [0, 1, 3, 4, 5] // the white key each one sits after
+  return (
+    <div className="scr-prompt">
+      <span className="scr-prompt-text">select key</span>
+      <div className="scr-keys" aria-hidden>
+        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+          <span key={i} className="scr-key" />
+        ))}
+        {BLACK.map((after) => (
+          <span
+            key={after}
+            className="scr-key-black"
+            style={{ ['--after' as string]: String(after) }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ScreenValue({
+  value,
+  label,
+  level,
+  secondary,
+}: {
+  value: string
+  label: string
+  level?: number | undefined
+  secondary?: boolean | undefined
+}) {
+  /*
+   * The height is measured; the width has to be earned.
+   *
+   * A 108px cap height needs a 132px type size, and at this face's 0.60em digit
+   * advance three glyphs then want 238px inside a 128px panel. The hardware's
+   * numerals are far narrower than anything we have — so keep the measured
+   * height and condense horizontally to fit, which is what a display face does
+   * in the first place. One glyph is left alone; only longer values squeeze.
+   */
+  const ADVANCE = 0.6 // em per glyph, measured in the browser for this face
+  const scale = Math.min(1, 126 / (ADVANCE * 132 * value.length))
+
+  return (
+    <div className="scr-value">
+      <div className="scr-value-field">
+        {level !== undefined && (
+          <span
+            className="scr-value-fill"
+            style={{ ['--level' as string]: String(Math.max(0, Math.min(1, level))) }}
+            aria-hidden
+          />
+        )}
+        <span className="scr-value-num" style={{ ['--scale' as string]: String(scale) }}>
+          {value}
+        </span>
+      </div>
+      <span className="scr-value-label" data-secondary={secondary === true}>
+        {label}
+      </span>
     </div>
   )
 }

@@ -23,7 +23,19 @@ export const PERFORM_MODES: readonly PerformMode[] = [
 ]
 
 export const PERFORM_LABEL: Record<PerformMode, string> = {
-  off: 'Off',
+  /*
+   * `Block`, not `Off`.
+   *
+   * They are the same mode and the manual uses both words for it — "turn fully
+   * left → off" for the dial position, "the static block chord produced by the
+   * chord engine" for what you hear (research/06). The list wants the second
+   * one: every other row here names a sound, and this section is never really
+   * off — it always emits the chord, it just does not articulate it. Calling
+   * the row `Off` invited the reading that the whole section had been bypassed.
+   *
+   * The id stays `off`, because that is what the dial's leftmost stop is.
+   */
+  off: 'Block',
   strum: 'Strum',
   strum2: 'Strum 2 Octaves',
   slop: 'Slop',
