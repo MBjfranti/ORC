@@ -1844,3 +1844,71 @@ body {
   line-height: 1;
   letter-spacing: 0.04em;
 }
+
+/* --- the playing screen (research/13 §C.2, measured on PDF p15b) ----------
+ *
+ *   y=0..10    C# Major                    Trans +1
+ *   y=11..127  the view
+ *
+ * The rail is white text on black, *not* an inverted bar — the illustration is
+ * explicit about that, and inverting it was the previous build's mistake.
+ */
+
+.scr-play {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.scr-rail {
+  flex: none;
+  height: calc(var(--px) * 11);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--label);
+  /* 11px cap height, the same as a list row. */
+  font-size: calc(var(--px) * 15);
+  line-height: 1;
+  padding-inline: 0 calc(var(--px) * 4);
+  white-space: nowrap;
+}
+
+/*
+ * Condensed to fit, the same trade the glance numerals make.
+ *
+ * `C# Major` and `Trans +1` are sixteen characters across 128 pixels, which the
+ * hardware's face manages at an 11px cap height and ours does not — at that
+ * height Saira wants about 144. The measured height is the thing worth keeping,
+ * so the width gives. Anchored to its own edge so each half stays in the corner
+ * §9.5 puts it in.
+ */
+.scr-rail span {
+  transform: scaleX(0.82);
+}
+
+.scr-rail span:first-child {
+  transform-origin: left center;
+}
+
+.scr-rail span:last-child {
+  transform-origin: right center;
+}
+
+.scr-chord {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--label);
+  font-size: calc(var(--px) * 52);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.scr-chord sup {
+  font-size: 0.5em;
+  vertical-align: super;
+  line-height: 0;
+}

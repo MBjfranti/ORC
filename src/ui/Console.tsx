@@ -22,11 +22,12 @@
  * to say "this is a display".
  */
 
-import { memo, useCallback, useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
 import { barsLabel, LOOP_BARS } from '../core/looper.js'
 import { noteName } from '../core/spelling.js'
+import type { Sounding } from '../engine/instrument.js'
 import { keyIndex, KEYS, MODE_LABEL, MODE_SUFFIX } from '../core/types.js'
 import { soundNumber, SOUNDS } from '../engine/sounds.js'
 import { FX_IDS, FX_LABEL, usePanel } from '../state/panel.js'
@@ -65,7 +66,7 @@ const SHOW = {
 /** 0–99, the unit an instrument panel uses. Never a percentage. */
 const level = (n: number) => String(Math.round(n * 99)).padStart(2, '0')
 
-export const Console = memo(function Console() {
+export const Console = memo(function Console({ sounding }: { sounding: Sounding | undefined }) {
   const s = usePanel()
 
   const fxAmount: Record<FxId, number> = {
@@ -84,7 +85,7 @@ export const Console = memo(function Console() {
         you reach for takes it over.
       */}
       <EncoderBank indices={rowIndices.slice(0, SCREEN_AFTER)} />
-      <StatScreen />
+      <StatScreen sounding={sounding} />
       <EncoderBank indices={rowIndices.slice(SCREEN_AFTER)} />
 
               {/*
@@ -397,7 +398,7 @@ function Unit({ label, children }: { label: string; children: React.ReactNode })
  * stop reading. Selecting an encoder opens *its* list, which is the only thing
  * the screen is for while your hand is on a knob.
  */
-function StatScreen() {
+function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
   const s = usePanel()
   const view = screenRows(s.screenList, s)
   const glance = s.glance
@@ -476,8 +477,15 @@ function StatScreen() {
     )
   }
 
+  // Nothing else is asking for the screen, so it goes back to playing. Menus do
+  // *not* time out into this — they are sticky and left by choosing `Exit`
+  // (research/13 §B.6). Only the glance expires.
   if (!view) {
-    return <div className="screen screen-stat" role="status" aria-label="Display" />
+    return (
+      <div className="screen screen-stat" role="status" aria-label="Display">
+        <ScreenPlaying sounding={sounding} />
+      </div>
+    )
   }
 
   const label =
@@ -591,6 +599,70 @@ const DASH_ORIGIN = -25
 
 /** How long a value readout stays up after the last turn. research/13 §B.6. */
 const GLANCE_MS = 1200
+
+/**
+ * How long the chord stays up after you let go.
+ *
+ * v3.90: "chord display now lingers briefly after chord release". A number is
+ * not given, so this is ours — long enough that a chord change does not blink
+ * through empty, short enough that the screen is not lying about what is
+ * sounding.
+ */
+const LINGER_MS = 1400
+
+/** Hold on to the last truthy value for a moment after it goes away. */
+function useLinger<T>(value: T | undefined, ms: number): T | undefined {
+  const [held, setHeld] = useState(value)
+  useEffect(() => {
+    if (value !== undefined) {
+      setHeld(value)
+      return
+    }
+    const timer = window.setTimeout(() => setHeld(undefined), ms)
+    return () => window.clearTimeout(timer)
+  }, [value, ms])
+  return value ?? held
+}
+
+/**
+ * The playing screen — where the display sits when nothing else is happening.
+ *
+ * Measured on PDF p15b (research/13 §C.2): a status rail flush to the top,
+ * `y = 0…10`, **white on black rather than an inverted bar**, with the key name
+ * in the top-left corner and the transposition in the top-right. §9.5 confirms
+ * both placements. The formats are the manual's own — `C# Major`, the tonic
+ * plus the full mode word, not `Key: C#`; and `Trans +1`, not `+01`.
+ *
+ * The rest of the panel is the view. The hardware has five (Options → System →
+ * View): chord notation, a notes list, a reactive waveform, a keyboard, and
+ * `Geek Out` which shows three at once. This is the first of them.
+ */
+function ScreenPlaying({ sounding }: { sounding: Sounding | undefined }) {
+  const key = usePanel((s) => s.key)
+  const keyMode = usePanel((s) => s.keyMode)
+  const transpose = usePanel((s) => s.transpose)
+  const chord = useLinger(sounding, LINGER_MS)
+
+  return (
+    <div className="scr-play">
+      <div className="scr-rail">
+        <span>{keyMode ? `${noteName(key.tonic, key)} ${MODE_LABEL[key.mode]}` : ''}</span>
+        {/* MANUAL SILENT on whether a zero shows. Left off: a rail that always
+            reads `Trans +0` is a rail you stop reading. */}
+        <span>{transpose === 0 ? '' : `Trans ${transpose > 0 ? '+' : ''}${transpose}`}</span>
+      </div>
+      <div className="scr-chord">
+        {chord && (
+          <span>
+            {chord.root}
+            {chord.base}
+            {chord.sup && <sup>{chord.sup}</sup>}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 /**
  * The value readout, as the hardware draws it (research/13 §C.3, measured).

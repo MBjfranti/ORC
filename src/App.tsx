@@ -600,7 +600,7 @@ export default function App() {
             </div>
           )}
 
-          <Console />
+          <Console sounding={sounding} />
         </section>
 
         {/*
