@@ -32,7 +32,7 @@ import { routeKeypress } from './bass.js'
 import type { Resolved } from '../core/resolve.js'
 import type { MidiNote, PitchClass } from '../core/types.js'
 import { nearestPosition } from '../core/voicing.js'
-import { extensionModeOf, playStyleOf, usePanel } from '../state/panel.js'
+import { extensionModeOf, playStyleOf, secretsOn, splitPointOf, usePanel } from '../state/panel.js'
 import type { PanelState } from '../state/panel.js'
 import type { ChordType, Extension } from '../core/types.js'
 import type { Looper } from './looper.js'
@@ -244,7 +244,9 @@ export class Instrument {
 
     this.lastExtensions = [...s.heldExtensions]
     const resolved = this.resolve(root, s, previous)
-    const notes = resolved ? resolved.notes : [resolveSingleNote(root, s.octave)]
+    // No chord held, so this is a single note — and where it lands is Single
+    // Note Mode's whole job (§14.7).
+    const notes = resolved ? resolved.notes : [resolveSingleNote(root, s.octave, splitPointOf(s))]
     // The bypass wins over the dial, so an articulation can be dropped for a
     // phrase without losing which one it was.
     const mode = s.performOn ? s.performMode : 'off'
@@ -333,6 +335,7 @@ export class Instrument {
       octave: s.octave,
       voicing: s.voicing,
       transpose: s.transpose,
+      secrets: secretsOn(s),
     }
 
     if (!s.voiceLead || !previous) return resolveChord(input)
@@ -391,6 +394,7 @@ export class Instrument {
       chromatic: s.chromatic,
       octave: s.octave,
       voicing: s.voicing,
+      secrets: secretsOn(s),
     })
     if (!resolved) return
 

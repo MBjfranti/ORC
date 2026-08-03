@@ -329,7 +329,8 @@ same mark the FX rack puts on an effect it does not have:
 | `View` | inert — the five other view modes are the open item below |
 | `Play Style` | **built** — Simple / Advanced / Free, see below |
 | `Extension Addition` | **built** — `Add Note` or `Play Chord`, scoped to Advanced and Free per §14.6 |
-| `Single Note Mode`, `Secret Chords` | inert — real behavioural settings, not built |
+| `Single Note Mode` | **built** — `Split Keyboard` or `Full Octave Keyboard`, see below |
+| `Secret Chords` | **built** — the six combinations of §14.8, gated by play style |
 | `Velocity Sense` | inert **and will stay so** — a computer keyboard sends no velocity. Nothing to sense until MIDI input exists |
 | `Audio Output`, `Auto Power Off`, `Upgrade firmware`, `MIDI Channels` | hardware — speakers vs a headphone jack, a battery timeout, firmware. A tab has none of them |
 
@@ -376,6 +377,56 @@ on any recolour", simply *forming* a chord played it twice — once from the key
 once from the effect that follows the pad — because a type change also reaches
 `recolour`. §14.6 says "replays the full chord when **extensions are added**",
 so the trigger now compares the extension set against the last one.
+
+### Secret Chords (§14.8)
+
+Six chords that are not extra pads but what two pads mean **held together** —
+which is why the normal path cannot reach them: `resolve` takes the most recent
+pad and drops the rest, so `Maj + Min` is otherwise just `Min`. Every one is
+something the additive triad-plus-extensions model genuinely cannot spell.
+
+Verified through the real play path, in Simple:
+
+| Pads | Sounds | Chord |
+|---|---|---|
+| `Dim + Sus` | `48 55` | `C5`, a bare fifth |
+| `Maj + Sus` | `48 52 56` | `C+` |
+| `Min + Sus` | `48 51 53 55` | `Cmadd4` |
+| `Maj + Min` + `m7` | `48 52 55 58 63` | `C7♯9` |
+
+The joke in the table is worth keeping: a ♯9 is enharmonically a minor third, so
+a chord wanting a major *and* a minor third at once is exactly what `Maj + Min`
+should mean.
+
+Matching is **exact** — the table's `None` column is a condition, not a blank.
+`Dim + Sus` is a fifth; `Dim + Sus + 9` is a player holding three pads and gets
+what they asked for. Gating verified: `Off` gives a plain sus, `Simple
+PlayStyle` does nothing while in Free, `All PlayStyle` fires in Free.
+
+### Single Note Mode (§14.7) — and a reading the tests caught
+
+`Full Octave Keyboard` keeps twelve keys in one octave. `Split Keyboard` puts an
+octave jump at a point on the keybed.
+
+§5.5 needed disambiguating. Read as an *absolute* instruction — "notes above
+that point play an octave higher, and notes below play an octave lower", each
+relative to the chosen octave — the keybed spans **35 semitones** with a
+two-octave cliff at the seam. Read as a statement about the two halves relative
+to *each other*, it spans 23 with a single octave of jump.
+
+research/05 settles it: "effectively gives you **two octaves of range** from one
+octave of keys". Two octaves is 23. §5.5's own "jump up or down **an** octave"
+is singular, and agrees.
+
+**The first implementation used the absolute reading and the range assertion
+failed.** Verified: `C F♯ G` reads `48 54 55` on Full Octave and `48 54 67` on
+Split — the seam falls between F♯ and G, one octave wide.
+
+The split *point* is fixed at G. §5.5 calls it "a point that you choose on the
+keyboard", but the mechanism for choosing is the Chord Voicing dial's own
+position on hardware, and this keyboard has no equivalent free axis —
+**MANUAL SILENT for our layout**. The mode is real; the movable point is not
+built.
 
 ## Still not built
 

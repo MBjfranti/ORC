@@ -9,6 +9,7 @@
  * print the chord musicians would actually write.
  */
 
+import { SECRET_CHORDS } from './secret.js'
 import { EXTENSIONS, mod12 } from './types.js'
 import type { ChordSpec, ChordType, Extension, PitchClass } from './types.js'
 
@@ -32,6 +33,13 @@ const EXTENSION_INTERVAL: Record<Extension, number> = {
 
 /** Intervals above the root, ascending, duplicates removed. */
 export function buildChord(spec: ChordSpec): number[] {
+  // A Secret Chord replaces the additive model rather than adding to it — none
+  // of the six can be spelled as a triad plus extensions, which is the whole
+  // reason they need a table (§14.8).
+  if (spec.secret) {
+    const secret = SECRET_CHORDS.find((s) => s.id === spec.secret)
+    if (secret) return [...secret.intervals]
+  }
   const notes = new Set<number>(TRIAD[spec.type])
   for (const ext of dedupe(spec.extensions)) notes.add(EXTENSION_INTERVAL[ext])
   return [...notes].sort((a, b) => a - b)
@@ -76,6 +84,12 @@ export interface ChordName {
 export const OVERLOAD = 'JAZZ'
 
 export function chordName(spec: ChordSpec): ChordName {
+  // §14.8 prints its own symbols for these, and they are not derivable from the
+  // pads — `Maj + Min + m7` reads `C7♯9`, not `Cm7`.
+  if (spec.secret) {
+    const secret = SECRET_CHORDS.find((s) => s.id === spec.secret)
+    if (secret) return { base: secret.base, sup: secret.sup }
+  }
   const ext = new Set(dedupe(spec.extensions))
   const has = (e: Extension) => ext.has(e)
   const { type } = spec

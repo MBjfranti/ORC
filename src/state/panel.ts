@@ -12,6 +12,8 @@ import { create } from 'zustand'
 import { buildChord } from '../core/chord.js'
 import { clockAt, clockRow, CLOCK_ROWS } from '../core/beats.js'
 import { OPTIONS } from '../core/options.js'
+import { SECRET_MODES, secretsEnabled } from '../core/secret.js'
+import type { SecretMode } from '../core/secret.js'
 import type { OptionId } from '../core/options.js'
 import { GRIDS, LOOP_BARS } from '../core/looper.js'
 import { clampVoicing } from '../core/voicing.js'
@@ -371,6 +373,29 @@ export type ExtensionMode = 'addNote' | 'playChord'
 
 export const extensionModeOf = (s: PanelState): ExtensionMode =>
   (s.optionValue.extensionAddition ?? 0) === 1 ? 'playChord' : 'addNote'
+
+/** `Off` / `Simple PlayStyle` / `All PlayStyle` — §14.8. */
+export const secretModeOf = (s: PanelState): SecretMode =>
+  SECRET_MODES[s.optionValue.secretChords ?? 0] ?? 'off'
+
+/** Whether Secret Chords are reachable in the style currently selected. */
+export const secretsOn = (s: PanelState): boolean =>
+  secretsEnabled(secretModeOf(s), playStyleOf(s) === 'simple')
+
+/**
+ * Where the keyboard splits, or `undefined` for one octave — §14.7.
+ *
+ * `Split Keyboard` is value 0 and `Full Octave Keyboard` value 1, in the
+ * manual's own order. The split *point* is fixed at G for now: §5.5 calls it "a
+ * point that you choose on the keyboard", but the mechanism for choosing it is
+ * the Chord Voicing dial's own position on hardware, and this keyboard has no
+ * equivalent free axis. **MANUAL SILENT for our layout** — the mode is real,
+ * the movable point is not built.
+ */
+export const SPLIT_POINT = 7 as PitchClass
+
+export const splitPointOf = (s: PanelState): PitchClass | undefined =>
+  (s.optionValue.singleNote ?? 1) === 0 ? SPLIT_POINT : undefined
 
 /** The app's own version, standing in for §14.13's firmware version. */
 export const APP_VERSION = '0.1.0'

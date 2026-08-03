@@ -85,7 +85,19 @@ export interface ChordSpec {
   readonly root: PitchClass
   readonly type: ChordType
   readonly extensions: readonly Extension[]
+  /**
+   * A Secret Chord (§14.8), which overrides the additive triad-plus-extensions
+   * model entirely.
+   *
+   * Optional and carried rather than folded into `type`, because these six are
+   * not chord *types* — they are what two pads mean held together, and none of
+   * them can be spelled as a triad plus extensions. Keeping `type` and
+   * `extensions` alongside means the pads that produced it are still readable.
+   */
+  readonly secret?: SecretId | undefined
 }
+
+import type { SecretId } from './secret.js'
 
 export const mod12 = (n: number): PitchClass => ((n % 12) + 12) % 12
 

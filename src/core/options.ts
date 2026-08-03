@@ -124,7 +124,7 @@ export const OPTIONS: readonly OptionRow[] = [
     label: 'Single Note Mode',
     kind: 'enum',
     values: ['Split Keyboard', 'Full Octave Keyboard'],
-    built: false,
+    built: true,
   },
   // §14.8. `Off` is not named in the section but "turning **on** Secret Chords"
   // implies it, and research/02 records it. Inferred, and listed first.
@@ -133,7 +133,7 @@ export const OPTIONS: readonly OptionRow[] = [
     label: 'Secret Chords',
     kind: 'enum',
     values: ['Off', 'Simple PlayStyle', 'All PlayStyle'],
-    built: false,
+    built: true,
   },
   /*
    * §14.9, and one of the few that is fully built — it drives the looper's

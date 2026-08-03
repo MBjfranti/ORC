@@ -11,6 +11,8 @@ import { noteName } from './spelling.js'
 import { mod12 } from './types.js'
 import { clampVoicing, voiceChord } from './voicing.js'
 import type { ChromaticPolicy } from './key.js'
+import { secretFor } from './secret.js'
+import type { SecretId } from './secret.js'
 import type { ChordSpec, ChordType, Extension, Key, MidiNote, PitchClass } from './types.js'
 
 export interface ResolveInput {
@@ -27,6 +29,8 @@ export interface ResolveInput {
   readonly voicing: number
   /** Semitones to shift the played root by, from Key's press-and-turn axis. */
   readonly transpose?: number
+  /** Whether Secret Chords are reachable right now — §14.8, and see `secret.ts`. */
+  readonly secrets?: boolean
 }
 
 export interface Resolved {
@@ -69,6 +73,7 @@ export function resolveChord(input: ResolveInput): Resolved | undefined {
   const octave = input.octave + Math.floor(shifted / 12)
 
   let type: ChordType
+  let secret: SecretId | undefined
   let actualRoot = root
   let numeral = ''
   let borrowed = false
@@ -84,6 +89,12 @@ export function resolveChord(input: ResolveInput): Resolved | undefined {
      * Min rather than on some combination of the two.
      */
     type = types[types.length - 1]!
+    /*
+     * Two pads held together can spell something the additive model cannot
+     * reach at all (§14.8). Checked before the most-recent-pad rule, because
+     * that rule is precisely what would otherwise throw the combination away.
+     */
+    if (input.secrets) secret = secretFor(types, extensions)?.id
   } else if (keyMode) {
     const degree = chordForRoot(root, key, input.chromatic)
     type = degree.type
@@ -94,7 +105,7 @@ export function resolveChord(input: ResolveInput): Resolved | undefined {
     return undefined
   }
 
-  const spec: ChordSpec = { root: actualRoot, type, extensions }
+  const spec: ChordSpec = { root: actualRoot, type, extensions, secret }
   const intervals = buildChord(spec)
   const rootMidi = 12 * (octave + 1) + actualRoot
   // Clamped here as well as at the dial, because dropping an extension shrinks
@@ -116,6 +127,39 @@ export function resolveChord(input: ResolveInput): Resolved | undefined {
 }
 
 /** A bare note, for when no pad is held and Key Mode is off. */
-export function resolveSingleNote(root: PitchClass, octave: number): MidiNote {
-  return 12 * (octave + 1) + mod12(root)
+/**
+ * A single note, and where Single Note Mode puts it — §14.7.
+ *
+ * > "Split mode places the octave jump at a point that you choose on the
+ * > keyboard… **notes above that point play an octave higher, and notes below
+ * > play an octave lower**. Octave mode means that the entire keyboard will
+ * > stay within the octave that you choose." (§5.5)
+ *
+ * `Full Octave Keyboard` is the plain reading: twelve keys, one octave.
+ *
+ * `Split Keyboard` needs one thing disambiguated. Read as an absolute
+ * instruction — above the point goes up an octave from the chosen one, below
+ * goes down — the keybed spans **thirty-five** semitones, with a two-octave
+ * cliff at the seam. Read as a statement about the two halves *relative to each
+ * other*, it spans twenty-three with a single octave of jump.
+ *
+ * research/05 settles it: "effectively gives you **two octaves of range** from
+ * one octave of keys". Two octaves is twenty-three semitones, so the halves are
+ * relative and the jump is one octave — which is also what §5.5's own "jump up
+ * or down **an** octave" says, singular. The first reading was written here
+ * first and the range test caught it.
+ *
+ * The point of it, per research/05: "instead of an octave button that shifts
+ * everything, you get a wrap point that keeps low roots low and high melodies
+ * high".
+ */
+export function resolveSingleNote(
+  root: PitchClass,
+  octave: number,
+  split?: PitchClass,
+): MidiNote {
+  const pc = mod12(root)
+  const base = 12 * (octave + 1) + pc
+  if (split === undefined) return base
+  return pc >= split ? base + 12 : base
 }
