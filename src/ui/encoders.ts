@@ -26,6 +26,7 @@
 import { BEATS, beatLabel, clockRow, METERS } from '../core/beats.js'
 import { OPTIONS, optionById } from '../core/options.js'
 import { barsLabel, LOOP_BARS } from '../core/looper.js'
+import { nextFree, slotLabel, slotSummary } from '../core/slots.js'
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
 import { looperOrNull } from '../engine/looper.js'
 import { noteName } from '../core/spelling.js'
@@ -178,11 +179,23 @@ const keyName = (key: Key) => noteName(key.tonic, key) + MODE_SUFFIX[key.mode]
  * the same question and get the same answer.
  */
 export function loopRows(s: PanelState): Row[] {
+  /*
+   * A slot picker, opened by `Save As`, `Load Loop` or `Delete Loop`. Ten rows,
+   * each carrying what is in it — the bar count a player will recognise, or
+   * `--` for an empty slot.
+   */
+  if (s.loopPicker) {
+    return s.loopSlots.map((loop, i) => ({ label: slotLabel(i), value: slotSummary(loop) }))
+  }
+
   if (s.loopScreen === 'save') {
-    // §12.7, with `Exit` from [02]. `XX` is the manual's own placeholder for
-    // the next free slot.
+    /*
+     * §12.7, with `Exit` from research/02. `XX` is the manual's own placeholder
+     * — "save your loop in the **next available spot**" — so the row prints the
+     * slot it is actually about to use rather than a literal `XX`.
+     */
     return [
-      { label: 'Save As Loop 01' },
+      { label: `Save As ${slotLabel(nextFree(s.loopSlots))}` },
       { label: 'Save As' },
       { label: 'Load Loop' },
       { label: 'Delete Loop' },
@@ -270,6 +283,31 @@ function loopPress(s: PanelState): void {
     return
   }
 
+  /*
+   * Inside a picker: act on the slot under the cursor and come back.
+   *
+   * Saving overwrites without a confirm step, which is what the hardware does —
+   * research/08 notes it as deliberate, and a confirm on a ten-row list is the
+   * kind of safety that makes an instrument tiring. `Delete` is the considered
+   * act; `Save As` onto a full slot is the player's business.
+   */
+  if (s.loopPicker) {
+    const slot = s.loopCursor
+    if (s.loopPicker === 'delete') {
+      s.clearSlot(slot)
+    } else if (s.loopPicker === 'saveAs') {
+      const loop = looper.current
+      if (loop) s.saveLoopTo(slot, loop)
+    } else {
+      const loop = s.loopSlots[slot]
+      // "Load Loop to retrieve and **play** your saved Loops" (§12.7). An empty
+      // slot is not a thing to retrieve, so it simply is not a choice.
+      if (loop) looper.load(loop)
+    }
+    s.setLoopPicker(null)
+    return
+  }
+
   if (s.loopScreen === 'save') {
     /*
      * `Exit` leaves **Loop Mode**, not just this menu — it is the official way
@@ -280,12 +318,27 @@ function loopPress(s: PanelState): void {
      * It was returning to the Waiting Room, which left no way out of Loop Mode
      * at all short of the two-handed shortcut.
      */
-    if (s.loopCursor === 4) {
-      looper.pause()
-      s.setLoopScreen(null)
+    switch (s.loopCursor) {
+      case 0: {
+        // "Save your loop in the next available spot" — one press, no picker.
+        const loop = looper.current
+        if (loop) s.saveLoopTo(nextFree(s.loopSlots), loop)
+        return
+      }
+      case 1:
+        s.setLoopPicker('saveAs')
+        return
+      case 2:
+        s.setLoopPicker('load')
+        return
+      case 3:
+        s.setLoopPicker('delete')
+        return
+      default:
+        looper.pause()
+        s.setLoopScreen(null)
+        return
     }
-    // The ten slots still need somewhere to live before the rest can work.
-    return
   }
 
   // `Stop` is the only row while it is up, so the cursor cannot be anywhere

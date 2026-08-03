@@ -16,8 +16,11 @@ import { SECRET_MODES, secretsEnabled } from '../core/secret.js'
 import type { SecretMode } from '../core/secret.js'
 import type { OptionId } from '../core/options.js'
 import { GRIDS, LOOP_BARS } from '../core/looper.js'
+import { nextFree } from '../core/slots.js'
+import type { Slots } from '../core/slots.js'
+import { readSlots, writeSlots } from '../engine/slots.js'
 import { clampVoicing } from '../core/voicing.js'
-import type { Grid } from '../core/looper.js'
+import type { Grid, Loop } from '../core/looper.js'
 import type { LoopState } from '../engine/looper.js'
 import { PERFORM_MODES } from '../core/performance.js'
 import type { PerformMode } from '../core/performance.js'
@@ -206,6 +209,15 @@ export interface PanelState {
    * reads as a hang.
    */
   loopCount: number
+  /**
+   * The ten save slots (§12.7), and which picker is open over them.
+   *
+   * `loopPicker` is `null` on the Save menu itself and names the job once you
+   * have chosen one — the same two-level shape the Options menu uses, and for
+   * the same reason: `Save As Loop 01` and a slot list will not share a row.
+   */
+  loopSlots: Slots
+  loopPicker: 'saveAs' | 'load' | 'delete' | null
 
   /**
    * Which encoder the number row is addressing.
@@ -334,6 +346,10 @@ export interface PanelState {
   cycleBassMode: (delta: number) => void
   cycleLoopBars: (delta: number) => void
   setLoopScreen: (screen: PanelState['loopScreen']) => void
+  setLoopPicker: (picker: PanelState['loopPicker']) => void
+  /** Write the current loop into a slot, overwriting without ceremony (§12.7). */
+  saveLoopTo: (slot: number, loop: Loop) => void
+  clearSlot: (slot: number) => void
   moveLoopCursor: (delta: number, rows: number) => void
   syncLoop: (state: LoopState, layers: number, bars: number | null, length: number, countBeat: number) => void
   toggleLatch: () => void
@@ -350,6 +366,9 @@ export interface PanelState {
 }
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
+
+/** Which row of the Save menu opens each picker — §12.7's own order. */
+const PICKER_ROW: Record<'saveAs' | 'load' | 'delete', number> = { saveAs: 1, load: 2, delete: 3 }
 
 /** How the pads and the keys interact — `Options → Play Style` (§14.5). */
 export type PlayStyle = 'simple' | 'advanced' | 'free'
@@ -540,6 +559,10 @@ export const usePanel = create<PanelState>((set) => ({
   loopLayers: 0,
   loopLength: 0,
   loopCount: 0,
+  // Read once at startup. A reload is a tab's version of powering off, and
+  // unlike the hardware these survive it.
+  loopSlots: readSlots(),
+  loopPicker: null,
 
   dialFocus: 0,
   optionsPage: null,
@@ -867,7 +890,32 @@ export const usePanel = create<PanelState>((set) => ({
    * Only on a full close — reopening the same menu has to preserve the state,
    * or the press that toggles adjust would clear it on the way in.
    */
-  setLoopScreen: (loopScreen) => set({ loopScreen }),
+  setLoopScreen: (loopScreen) => set({ loopScreen, loopPicker: null }),
+  setLoopPicker: (loopPicker) =>
+    set((s) => ({
+      loopPicker,
+      /*
+       * Opening a picker lands on the slot the menu was about to use; closing
+       * one returns to the row that opened it rather than to the top of the
+       * menu, so a save and a delete do not send you hunting for your place.
+       */
+      loopCursor:
+        loopPicker === null ? PICKER_ROW[s.loopPicker ?? 'saveAs'] : nextFree(s.loopSlots),
+    })),
+
+  saveLoopTo: (slot, loop) =>
+    set((s) => {
+      const loopSlots = s.loopSlots.map((existing, i) => (i === slot ? loop : existing))
+      writeSlots(loopSlots)
+      return { loopSlots }
+    }),
+
+  clearSlot: (slot) =>
+    set((s) => {
+      const loopSlots = s.loopSlots.map((existing, i) => (i === slot ? null : existing))
+      writeSlots(loopSlots)
+      return { loopSlots }
+    }),
   moveLoopCursor: (delta, rows) =>
     set((s) => ({ loopCursor: Math.max(0, Math.min(rows - 1, s.loopCursor + delta)) })),
 

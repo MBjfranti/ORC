@@ -457,11 +457,47 @@ it. The chord markup is unchanged from the already-working playing screen and
 `noteWithOctave` is tested core, but the lit keys, the note list and the
 oscilloscope trace have not been seen.
 
+### The ten loop slots (§12.7) — built, and they persist
+
+`Save As Loop XX` / `Save As` / `Load Loop` / `Delete Loop`, with the three
+pickers opening a ten-row slot list on a second screen — the same two-level
+shape Options uses, for the same reason: `Save As Loop 01` and a slot list will
+not share a 128px row.
+
+**Ten, not more.** research/08 calls this "the single clearest gap for our
+webapp… a browser has localStorage, IndexedDB, file export and unlimited slots",
+and the temptation is fifty. The count is documented, `Save As Loop XX` names a
+two-digit slot, and an instrument with a different number of slots from the one
+it models stops being that instrument.
+
+**What a browser adds instead is memory.** The hardware's loops live "in memory
+until the device powers off"; these survive a reload. Same interface, longer
+memory — verified: saved, reloaded the page, and the slot was still there and
+still loadable, with its layer still on preset 6.
+
+Overwriting is deliberate, per research/08: "new loops overwrite an occupied
+slot without a separate confirm step". Kept. `Delete` is the considered act; a
+confirm on a ten-row list is the kind of safety that makes an instrument tiring.
+
+`Loading warms the pool.` A saved loop's layers carry presets this session may
+never have touched, and building one costs 8-12ms against a 10ms lookahead — so
+`load` builds them all up front rather than letting the first playback callback
+do it. Same trap as `stampSounds`.
+
+Storage is defensive: anything unrecognisable in `localStorage` reads back as an
+**empty slot** rather than reaching the looper, and a blocked or full store
+degrades to session-only rather than refusing to save. Both are tested.
+
+Verified end to end: save to the next free slot (the row then reads `Save As
+Loop 02`), `Save As` into a chosen slot, `Load Loop` restoring a cleared
+transport to `playing` with its layer on preset 6, `Delete` emptying a slot, the
+cursor returning to the row that opened each picker, and the bank surviving a
+reload.
+
 ## Still not built
 
 | Thing | Notes |
 |---|---|
-| Loop's 10 save slots | research/08 calls this "the clearest gap for our webapp" — a browser has localStorage and unlimited slots |
 | The Options settings marked inert above | Play Style is the biggest: it changes how pads and keys interact |
 | Phaser, Flanger, Drive, Tremolo, Ensemble | rows exist showing `--`; Tone has three of them |
 | Chord Voicing press → Split ↔ Octave | needs split-mode state |

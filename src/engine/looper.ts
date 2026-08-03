@@ -19,6 +19,7 @@ import {
 } from '../core/looper.js'
 import type { Grid, Layer, Loop, LoopEvent, Stream } from '../core/looper.js'
 import { METERS } from '../core/beats.js'
+import { presetsIn } from '../core/slots.js'
 import type { Meter } from '../core/beats.js'
 import { atTick, barTicks, beatTicks, nextBar, secondsToTicks, ticksAt } from './clock.js'
 import type { Synth } from './synth.js'
@@ -375,8 +376,21 @@ export class Looper {
     this.onChange?.()
   }
 
+  /**
+   * Load a saved loop and play it — "retrieve and play your saved Loops" (§12.7).
+   *
+   * Its layers carry the presets they were recorded with, and those may be ones
+   * this session has never touched. Building a `PolySynth` costs 8-12ms against
+   * a 10ms lookahead, so every preset the loop needs is built **here**, on the
+   * press, rather than inside the first playback callback where it would arrive
+   * as a hitch on the first pass. Same trap as `stampSounds`; see `Synth.warm`.
+   */
   load(loop: Loop): void {
     this.reset()
+    const { sounds, basses } = presetsIn(loop)
+    for (let i = 0; i < Math.max(sounds.length, basses.length); i++) {
+      this.synth.warm(sounds[i] ?? sounds[0] ?? 0, basses[i] ?? basses[0] ?? 0)
+    }
     this.loop = loop
     this.begin('playing')
   }
