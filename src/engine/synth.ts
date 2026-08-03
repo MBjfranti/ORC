@@ -1,8 +1,10 @@
 /**
- * The only module that touches Tone.js.
+ * The audio graph, and the seam Tone.js lives behind.
  *
  * Everything upstream deals in MIDI note numbers and seconds. Keeping the seam
  * here means the chord and voicing engines never learn what an AudioContext is.
+ * Two siblings share the seam — `engine/looper.ts` drives the transport and
+ * `engine/drums.ts` owns the kit — but nothing above `engine/` imports Tone.
  *
  * ## Why this owns its own scheduling
  *
@@ -23,8 +25,10 @@
 
 import * as Tone from 'tone'
 
+import type { Beat, Meter } from '../core/beats.js'
 import type { MidiNote } from '../core/types.js'
 import { bassAt } from './bass.js'
+import { Drums } from './drums.js'
 import { decayFor, soundAt } from './sounds.js'
 import type { Sound } from './sounds.js'
 
@@ -62,6 +66,10 @@ class Synth {
   private bass!: Tone.MonoSynth
   private bassGain!: Tone.Gain
   private bassNote: MidiNote | undefined
+  private metronome!: Tone.Synth
+  private metronomeId: number | undefined
+  private clickLevel = 0.6
+  private drums!: Drums
 
   private started = false
   private prepared = false
@@ -116,9 +124,10 @@ class Synth {
       // shows up only as arpeggios that never advance past their first note.
       Tone.getTransport().start()
 
-      // The impulse response is generated asynchronously; waiting here means the
-      // cost is paid during load rather than under the first chord.
-      await this.reverb.ready
+      // The impulse responses are generated asynchronously; waiting here means
+      // the cost is paid during load rather than under the first chord — and
+      // the drums render one of their own, so both have to be waited on.
+      await Promise.all([this.reverb.ready, this.drums.ready])
       this.prepared = true
     })()
     return this.preparing
@@ -240,6 +249,24 @@ class Synth {
         .set({ volume: -14 })
         .connect(this.filter),
     )
+
+    /*
+     * The click goes straight to the output — no filter, no reverb, no chorus.
+     * A metronome that swims in the same space as the instrument is a metronome
+     * you cannot hear over it, and it is not part of the performance: it is not
+     * recorded and it is not shaped by the sound you happen to have loaded.
+     */
+    this.metronome = new Tone.Synth({
+      oscillator: { type: 'square' },
+      envelope: { attack: 0.001, decay: 0.03, sustain: 0, release: 0.02 },
+    })
+      .set({ volume: -20 })
+      .connect(this.master)
+
+    // The kit takes the same route out as the click, and for the same reason:
+    // the beat is not part of the performance. It is never captured by the
+    // looper and never shaped by whichever sound happens to be loaded.
+    this.drums = new Drums(this.master)
 
     // The bass takes its own path to the output, bypassing the chord FX chain
     // so reverb and chorus do not turn the low end to mush.
@@ -495,6 +522,87 @@ class Synth {
       },
       volume: sound.volume,
     })
+  }
+
+  /**
+   * The metronome click.
+   *
+   * Documented, and documented as sounding exactly here: `Options → Audio and
+   * MIDI → Metronome Click` offers **Beep** or **Hi Hat**, and v3.90's note
+   * reads "metronome sounds during Loop record count-in, then plays the Beat if
+   * selected" (research/08). This is the Beep.
+   *
+   * The downbeat is a fifth higher and a touch louder, because a count-in whose
+   * four clicks are identical does not tell you when bar one starts — which is
+   * the only thing it is for.
+   */
+  click(at: number, accent = false): void {
+    if (!this.started) return
+    const velocity = (accent ? 0.9 : 0.55) * this.clickLevel
+    this.metronome.triggerAttackRelease(accent ? 1600 : 1067, 0.03, at, velocity)
+  }
+
+  /**
+   * Metronome volume, the other half of the BPM dial's press-and-turn.
+   *
+   * > "Press and turn the BPM Dial to independently adjust the volume of Beats
+   * > **or** the Metronome." — §4.2
+   *
+   * Independent, so two numbers: which one the gesture moves depends on which
+   * the dial is pointed at. Applied to the click's velocity rather than to a
+   * gain node, because there is nothing else on this path to turn down.
+   */
+  setClickLevel(level: number): void {
+    this.clickLevel = clamp01(level)
+  }
+
+  /**
+   * The metronome, running on its own.
+   *
+   * Pressing the BPM encoder switches it on and off (research/13 §B.2, §11.2).
+   * It is the thing that makes a count-in usable: you can hear the tempo before
+   * you commit to recording, rather than pressing record and hoping.
+   *
+   * Scheduled as a quarter-note repeat on the transport, so it follows the BPM
+   * without being re-armed — and it is never captured, because it does not go
+   * anywhere near the looper.
+   */
+  setMetronome(on: boolean, meter: Meter): void {
+    if (!this.started) return
+    if (this.metronomeId !== undefined) {
+      Tone.getTransport().clear(this.metronomeId)
+      this.metronomeId = undefined
+    }
+    if (!on) return
+    let beat = 0
+    // The accent is the bar line, so the repeat has to know the meter — a click
+    // that accents every fourth beat in seven-eight is worse than one that never
+    // accents at all, because it confidently tells you the wrong thing.
+    this.metronomeId = Tone.getTransport().scheduleRepeat((time) => {
+      this.click(time, beat % meter.beats === 0)
+      beat += 1
+    }, meter.unit)
+  }
+
+  // --- the beat machine ------------------------------------------------------
+  //
+  // Delegated rather than exposed, so `App` talks to one object about audio and
+  // the kit stays behind the same seam as everything else.
+
+  setBeat(beat: Beat | undefined): void {
+    if (this.started) this.drums.setBeat(beat)
+  }
+
+  setBeatLevel(level: number): void {
+    if (this.started) this.drums.setLevel(level)
+  }
+
+  setDrumReverb(wet: number): void {
+    if (this.started) this.drums.setReverb(wet)
+  }
+
+  setDrumSaturation(wet: number): void {
+    if (this.started) this.drums.setSaturation(wet)
   }
 
   setBpm(bpm: number): void {

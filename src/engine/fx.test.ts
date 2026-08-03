@@ -33,7 +33,16 @@ describe('the effects list', () => {
      * The picture wins for the first three.
      */
     expect(FX_SLOTS.slice(0, 3).map((f) => f.label)).toEqual(['Reverb', 'Chorus', 'Delay'])
-    // …and the prose supplies the tail.
+    /*
+     * …and the prose supplies the tail — all of it. §8.1 runs on past Filter to
+     * `Drum FX Reverb` and `Drum FX Saturation`, and §11.4 confirms they are
+     * reached from this dial rather than from BPM: "press the FX Dial and
+     * scroll to access Drum FX". The list stopped at Filter for as long as
+     * there was no beat engine for those two rows to point at.
+     *
+     * The labels are shortened. Every row here carries a two-digit value on a
+     * 128-pixel display, and nothing else on the list begins with `Drum`.
+     */
     expect(FX_SLOTS.map((f) => f.label)).toEqual([
       'Reverb',
       'Chorus',
@@ -44,6 +53,8 @@ describe('the effects list', () => {
       'Tremolo',
       'Ensemble',
       'Filter',
+      'Drum Reverb',
+      'Drum Sat',
     ])
   })
 

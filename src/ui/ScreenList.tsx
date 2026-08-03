@@ -22,6 +22,9 @@ export const VISIBLE_ROWS = 5
 /** The slot the cursor never leaves. */
 export const CURSOR_ROW = 2
 
+/** Characters a row fits at full width, measured on the rendered panel. */
+const LONG_LABEL = 17
+
 /**
  * Which item index sits in each of the five slots — `null` where the list has
  * run out. This is the whole of the fixed-cursor behaviour.
@@ -97,7 +100,15 @@ export const ScreenList = memo(function ScreenList({
             aria-selected={slot === mid}
             data-sel={slot === mid}
           >
-            <span className="scr-row-label">{row.label}</span>
+            {/*
+              Above this length a label will not fit the row, so it condenses
+              instead of clipping — see `.scr-row-label[data-long]`. Measured
+              against the widest name the manual gives us, `02 Orchid
+              Bossanova`, which overruns by three pixels at full width.
+            */}
+            <span className="scr-row-label" data-long={row.label.length > LONG_LABEL}>
+              {row.label}
+            </span>
             {row.value && (
               <span className="scr-row-value" data-editing={row.editing === true}>
                 {row.value}

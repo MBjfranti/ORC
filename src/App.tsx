@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { beatAt, meterAt } from './core/beats.js'
 import { Instrument } from './engine/instrument.js'
 import type { Sounding } from './engine/instrument.js'
 import { getLooper } from './engine/looper.js'
@@ -94,6 +95,12 @@ export default function App() {
     synth.setBassLevel(s.bassLevel)
     synth.setBassSound(s.bassIndex)
     synth.setBpm(s.bpm)
+    synth.setBeatLevel(s.beatLevel)
+    synth.setClickLevel(s.clickLevel)
+    synth.setDrumReverb(s.drumReverb)
+    synth.setDrumSaturation(s.drumSat)
+    synth.setMetronome(s.clockOn && s.beatIndex === null, meterAt(s.meter))
+    synth.setBeat(s.clockOn && s.beatIndex !== null ? beatAt(s.beatIndex) : undefined)
   }, [synth])
 
   // --- settings → engine ---------------------------------------------------
@@ -107,7 +114,15 @@ export default function App() {
   const bassLevel = usePanel((s) => s.bassLevel)
   const bassIndex = usePanel((s) => s.bassIndex)
   const bpm = usePanel((s) => s.bpm)
+  const meterIndex = usePanel((s) => s.meter)
+  const beatIndex = usePanel((s) => s.beatIndex)
+  const clockOn = usePanel((s) => s.clockOn)
+  const beatLevel = usePanel((s) => s.beatLevel)
+  const clickLevel = usePanel((s) => s.clickLevel)
+  const drumReverb = usePanel((s) => s.drumReverb)
+  const drumSat = usePanel((s) => s.drumSat)
   const loopGrid = usePanel((s) => s.loopGrid)
+  const meter = meterAt(meterIndex)
 
   useEffect(() => void synth.setSound(soundIndex), [synth, soundIndex])
   useEffect(() => void synth.setCutoff(cutoff), [synth, cutoff])
@@ -118,6 +133,28 @@ export default function App() {
   useEffect(() => void synth.setBassLevel(bassLevel), [synth, bassLevel])
   useEffect(() => void synth.setBassSound(bassIndex), [synth, bassIndex])
   useEffect(() => void synth.setBpm(bpm), [synth, bpm])
+  useEffect(() => void synth.setBeatLevel(beatLevel), [synth, beatLevel])
+  useEffect(() => void synth.setClickLevel(clickLevel), [synth, clickLevel])
+  useEffect(() => void synth.setDrumReverb(drumReverb), [synth, drumReverb])
+  useEffect(() => void synth.setDrumSaturation(drumSat), [synth, drumSat])
+
+  /*
+   * One switch, two things it can start.
+   *
+   * `clockOn` is the BPM dial's press and `beatIndex` is where its list was
+   * left, so these two effects are the whole of "the Metronome **or** Beats can
+   * be toggled on/off by pressing the BPM Dial" (§12.6). Scrolling from a
+   * signature onto a beat while the clock runs hands over live, because both
+   * effects re-run on the same change.
+   */
+  useEffect(
+    () => void synth.setMetronome(clockOn && beatIndex === null, meter),
+    [synth, clockOn, beatIndex, meter],
+  )
+  useEffect(
+    () => void synth.setBeat(clockOn && beatIndex !== null ? beatAt(beatIndex) : undefined),
+    [synth, clockOn, beatIndex],
+  )
 
   // --- live chord edits ----------------------------------------------------
 
@@ -158,16 +195,30 @@ export default function App() {
     looper.configure({
       bpm,
       grid: loopGrid,
+      meter,
+      /*
+       * The handoff v3.90 describes: the click counts the bar in, and if a beat
+       * is selected it takes over the moment recording starts. Only when one is
+       * selected — with the cursor up among the signatures there is nothing to
+       * hand over to, and starting the drums would be inventing a beat the
+       * player never chose.
+       */
+      onRecord: () => {
+        const s = usePanel.getState()
+        if (s.beatIndex !== null && !s.clockOn) s.toggleClock()
+      },
       onChange: () => {
         const view = looper.view()
         setLoopView(view)
         // Mirror the discrete parts into the panel so the screen re-renders on
         // a transport event. The *position* stays out of it — the ring animates
         // itself off the pass length.
-        usePanel.getState().syncLoop(view.state, view.layers, view.bars, view.lengthSeconds)
+        usePanel
+          .getState()
+          .syncLoop(view.state, view.layers, view.bars, view.lengthSeconds, view.countBeat)
       },
     })
-  }, [looper, bpm, loopGrid])
+  }, [looper, bpm, loopGrid, meter])
 
   /**
    * Mirror the loop's position on rAF — but **only while a loop is running**,
@@ -490,6 +541,10 @@ export default function App() {
         case 'Escape':
           s.cancelKeySelect()
           s.setScreenList(null)
+          // Escape means "get me out" everywhere else on the panel, so it has
+          // to mean it here too. The loop keeps playing — leaving Loop Mode is
+          // not the same as stopping, which is what `\` is for.
+          s.setLoopScreen(null)
           instrument.panic()
           break
       }
@@ -629,6 +684,9 @@ export default function App() {
             <span>
               Hold a number and turn for its second axis — <kbd>4</kbd>+<kbd>-</kbd>
               <kbd>=</kbd> transposes
+            </span>
+            <span>
+              Loop <kbd>6</kbd> · leave it <kbd>esc</kbd> · stop and clear <kbd>\</kbd>
             </span>
             <span>
               Latch <kbd>space</kbd> · Loop <kbd>B</kbd>

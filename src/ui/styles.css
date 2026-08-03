@@ -1589,6 +1589,33 @@ body {
   text-overflow: clip;
 }
 
+/*
+ * A long label condenses rather than clipping.
+ *
+ * Measured: `02 Orchid Bossanova` wants 224px in a 221px row, so the one beat
+ * name we have straight from Telepathic overflowed by three pixels. Clipping a
+ * documented name is the one thing this list must not do — you would be reading
+ * `02 Orchid Bossanov` and wondering.
+ *
+ * The same fix the status rail already uses, and for the same reason: our
+ * typeface is wider than the hardware's, so where the panel is tight the text
+ * gives rather than the layout. Applied per-row above a character threshold, so
+ * the sixty-odd rows that fit are drawn at full width and untouched.
+ */
+.scr-row-label[data-long='true'] {
+  /*
+   * `flex: none` and `overflow: visible` are both load-bearing. The base rule
+   * clips this element, and clipping happens in its *own* coordinate space —
+   * before the transform. Left to shrink, the text was cut at the box width and
+   * then the already-cut box was scaled, which condensed nothing and still lost
+   * the last letter. It has to be allowed its natural width; the row clips.
+   */
+  flex: none;
+  overflow: visible;
+  transform: scaleX(0.9);
+  transform-origin: left center;
+}
+
 .scr-row-value {
   flex: none;
 }
@@ -1769,37 +1796,49 @@ body {
 }
 
 /*
- * The elapsed arc. Animated off the pass length rather than driven by React —
- * and `linear`, because the ring is a clock and easing it would make it lie.
- */
-/*
- * One dash that grows, rather than a repeating pattern that is offset.
+ * The elapsed arc, as a conic sweep.
  *
- * `stroke-dasharray: 100` on a *closed* path is two dashes of 100 with the
- * pattern wrapping at the seam, and shifting it by an offset put the visible
- * arc either side of twelve o'clock instead of starting there. A single dash
- * against an enormous gap cannot wrap, so it grows from the path's own start —
- * which the path puts at top-centre — clockwise, and nothing else can happen.
+ * A conic gradient begins at twelve o'clock and runs clockwise without being
+ * asked, which is what the illustrations measured. The stroke-dash version
+ * needed a quarter-turn correction found by experiment, and that correction
+ * then ate the final quarter: a dash window shifted along an open path runs
+ * off the end rather than wrapping round.
+ *
+ * Masked to the ring by the two-layer padding-box trick — one mask over the
+ * whole box, one over the content box, composited so only the 17px band
+ * between them survives.
  */
-.ring-fill {
-  stroke-dasharray: 0 1000;
+@property --sweep {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
 }
 
-.ring-fill[data-running='true'] {
-  animation: ring-fill var(--pass, 1s) linear infinite;
+.ring-sweep {
+  position: absolute;
+  inset: 0;
+  /* The outer corners of the ring. */
+  border-radius: calc(var(--px) * 11);
+  background: conic-gradient(#fff var(--sweep), #0000 0);
+  pointer-events: none;
 }
 
-.ring-fill[data-paused='true'] {
-  animation: ring-fill var(--pass, 1s) linear infinite;
+.ring-sweep[data-running='true'] {
+  animation: ring-sweep var(--pass, 1s) linear infinite;
+}
+
+.ring-sweep[data-paused='true'] {
+  animation: ring-sweep var(--pass, 1s) linear infinite;
   animation-play-state: paused;
 }
 
-@keyframes ring-fill {
+/* Linear, and it must not ease — the ring is a clock. */
+@keyframes ring-sweep {
   from {
-    stroke-dasharray: 0 1000;
+    --sweep: 0deg;
   }
   to {
-    stroke-dasharray: 100 1000;
+    --sweep: 360deg;
   }
 }
 

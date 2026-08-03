@@ -47,6 +47,8 @@ export type FxId =
   | 'tremolo'
   | 'ensemble'
   | 'filter'
+  | 'drumReverb'
+  | 'drumSat'
 
 export interface FxSlot {
   readonly id: FxId
@@ -74,6 +76,20 @@ export const FX_SLOTS: readonly FxSlot[] = [
   // The filter is listed with the effects but is a control in its own right on
   // the hardware — "plus a dedicated filter cutoff control" (research/07).
   { id: 'filter', label: 'Filter', built: true },
+  /*
+   * The tail of §8.1, and the two rows that are not about the synth at all:
+   * they shape the **beat**, and this is where the manual puts them. "Press the
+   * FX Dial and scroll to access Drum FX, where you can customize reverb and
+   * saturation on your drum sound" (§11.4) — so the beat machine's own two
+   * effects are reached from the FX dial rather than from BPM.
+   *
+   * Written short. The manual calls them `Drum FX Reverb` and `Drum FX
+   * Saturation`; the display is 128 pixels wide and every row carries a
+   * two-digit value, so the `FX` drops out of both. Nothing else on the list
+   * begins with `Drum`, so nothing is lost by it.
+   */
+  { id: 'drumReverb', label: 'Drum Reverb', built: true },
+  { id: 'drumSat', label: 'Drum Sat', built: true },
 ]
 
 /**

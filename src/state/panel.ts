@@ -10,6 +10,7 @@
 import { create } from 'zustand'
 
 import { buildChord } from '../core/chord.js'
+import { clockAt, clockRow, CLOCK_ROWS } from '../core/beats.js'
 import { GRIDS, LOOP_BARS } from '../core/looper.js'
 import { clampVoicing } from '../core/voicing.js'
 import type { Grid } from '../core/looper.js'
@@ -102,6 +103,24 @@ export interface PanelState {
    */
   performOn: boolean
   bpm: number
+  /**
+   * The BPM dial's clock: which time signature counts, and which beat plays.
+   *
+   * One selection across both, because the hardware makes it one list — "long
+   * press the BPM Dial and **scroll past the time signatures** to access Beats"
+   * (§11.4). `beatIndex` of `null` means the cursor is up among the signatures,
+   * and so the thing the dial addresses is the metronome.
+   *
+   * That is what makes one switch enough: "the Metronome **or** Beats can be
+   * toggled on/off by pressing the BPM Dial" (§12.6). `clockOn` is that switch,
+   * and what it starts depends on where you left the cursor.
+   */
+  meter: number
+  beatIndex: number | null
+  clockOn: boolean
+  /** Independently adjustable, per §4.2 — hence two numbers, not one. */
+  beatLevel: number
+  clickLevel: number
 
   // --- sound ---
   /** Index into the fifty-strong library. */
@@ -113,6 +132,9 @@ export interface PanelState {
   reverb: number
   delay: number
   volume: number
+  /** Drum FX — the two rows §8.1 puts at the tail of the effects list. */
+  drumReverb: number
+  drumSat: number
   /**
    * The FX rack's menu, which is the only two-state control on the panel:
    * turning browses until you press, and then turning adjusts (research/13
@@ -173,6 +195,14 @@ export interface PanelState {
   loopLayers: number
   /** Seconds per pass, which is the progress ring's animation duration. */
   loopLength: number
+  /**
+   * Beats left in the count-in, 4 down to 1.
+   *
+   * Ours rather than the manual's: the hardware counts you in audibly and says
+   * nothing about showing it. A bar of silence with nothing moving on screen
+   * reads as a hang.
+   */
+  loopCount: number
 
   /**
    * Which encoder the number row is addressing.
@@ -215,6 +245,14 @@ export interface PanelState {
     stamp: number
   } | null
 
+  /**
+   * When the screen was last interacted with.
+   *
+   * Only a *browse* list watches this — it expires like a value readout, while
+   * a menu stays until you leave it (research/13 §B.6).
+   */
+  screenTouched: number
+
   /** Held chords keep sounding after the hands leave. */
   latched: boolean
 
@@ -248,6 +286,12 @@ export interface PanelState {
   togglePerform: () => void
   pressPerform: () => void
   togglePerformLock: () => void
+  /** Walk the one list: signatures, then the twenty beats. */
+  cycleClock: (delta: number) => void
+  /** The press — start or stop whichever of the two the cursor is pointed at. */
+  toggleClock: () => void
+  /** Press-and-turn: the volume of whichever one that is. */
+  nudgeClockLevel: (delta: number) => void
   setBpm: (bpm: number) => void
 
   setSound: (index: number) => void
@@ -276,12 +320,13 @@ export interface PanelState {
   cycleLoopBars: (delta: number) => void
   setLoopScreen: (screen: PanelState['loopScreen']) => void
   moveLoopCursor: (delta: number, rows: number) => void
-  syncLoop: (state: LoopState, layers: number, bars: number | null, length: number) => void
+  syncLoop: (state: LoopState, layers: number, bars: number | null, length: number, countBeat: number) => void
   setLoopGrid: (grid: Grid) => void
   toggleLatch: () => void
   setDialFocus: (index: number) => void
   setScreenList: (index: number | null) => void
   showGlance: (value: string, label: string, level?: number, secondary?: boolean) => void
+  touchScreen: () => void
   clearGlance: () => void
 }
 
@@ -304,6 +349,10 @@ export function fxAmountOf(s: PanelState, id: RackId): number {
       return s.delay
     case 'filter':
       return s.cutoff
+    case 'drumReverb':
+      return s.drumReverb
+    case 'drumSat':
+      return s.drumSat
     default:
       return 0
   }
@@ -342,6 +391,10 @@ const fxPatch = (id: RackId, value: number): Partial<PanelState> => {
       return { delay: value }
     case 'filter':
       return { cutoff: value }
+    case 'drumReverb':
+      return { drumReverb: value }
+    case 'drumSat':
+      return { drumSat: value }
     default:
       return {}
   }
@@ -371,6 +424,11 @@ export const usePanel = create<PanelState>((set) => ({
   performAmount: 0.35,
   performOn: true,
   bpm: 96,
+  meter: 0, // 4/4
+  beatIndex: null, // up among the signatures, so the press means the click
+  clockOn: false,
+  beatLevel: 0.8,
+  clickLevel: 0.6,
 
   soundIndex: 0,
   fx: 'reverb',
@@ -379,6 +437,8 @@ export const usePanel = create<PanelState>((set) => ({
   reverb: 0.22,
   delay: 0,
   volume: 0.75,
+  drumReverb: 0.12,
+  drumSat: 0.2,
   fxCursor: 1, // Reverb — the first real row, as PDF p12 shows it
   fxAdjusting: false,
   fxLock: false,
@@ -396,10 +456,12 @@ export const usePanel = create<PanelState>((set) => ({
   loopState: 'empty',
   loopLayers: 0,
   loopLength: 0,
+  loopCount: 0,
 
   dialFocus: 0,
   screenList: null,
   glance: null,
+  screenTouched: 0,
   latched: false,
 
   setHeldType: (type, held) =>
@@ -517,6 +579,37 @@ export const usePanel = create<PanelState>((set) => ({
   pressPerform: () =>
     set((s) => (s.performMode === 'off' ? { performAdjusting: false } : { performAdjusting: !s.performAdjusting })),
   togglePerformLock: () => set((s) => ({ performLock: !s.performLock })),
+
+  /**
+   * One cursor across signatures and beats.
+   *
+   * Leaving the signatures does not forget which one you were on — `meter` is
+   * the click's setting and stays set while a beat plays, so scrolling back up
+   * lands where you left rather than resetting to four-four.
+   */
+  cycleClock: (delta) =>
+    set((s) => {
+      const at = clockRow(s.meter, s.beatIndex)
+      const next = Math.max(0, Math.min(CLOCK_ROWS - 1, at + delta))
+      const { meter, beat } = clockAt(next)
+      return beat === null ? { meter, beatIndex: null } : { beatIndex: beat }
+    }),
+
+  toggleClock: () => set((s) => ({ clockOn: !s.clockOn })),
+
+  /*
+   * Two levels behind one gesture, chosen by where the cursor is — which is
+   * exactly what "independently adjust the volume of Beats **or** the
+   * Metronome" describes (§4.2). A single shared level would make the click
+   * unusable the moment you set the beat where you wanted it.
+   */
+  nudgeClockLevel: (delta) =>
+    set((s) =>
+      s.beatIndex === null
+        ? { clickLevel: clamp01(s.clickLevel + delta * 0.02) }
+        : { beatLevel: clamp01(s.beatLevel + delta * 0.02) },
+    ),
+
   setBpm: (bpm) => set({ bpm: Math.max(40, Math.min(220, Math.round(bpm))) }),
 
   setSound: (soundIndex) =>
@@ -629,7 +722,7 @@ export const usePanel = create<PanelState>((set) => ({
    * should land on `Pause`, which is where PDF p18's illustration has it and
    * the only row you are likely to want first.
    */
-  syncLoop: (loopState, loopLayers, bars, loopLength) =>
+  syncLoop: (loopState, loopLayers, bars, loopLength, loopCount) =>
     set((s) => {
       const running = loopState !== 'empty'
       const screen = s.loopScreen === null ? null : s.loopScreen === 'save' ? 'save' : running ? 'transport' : 'sync'
@@ -638,21 +731,36 @@ export const usePanel = create<PanelState>((set) => ({
         loopState,
         loopLayers,
         loopLength,
+        loopCount,
         loopScreen: screen,
         loopCursor: cursor,
         ...(bars !== undefined && running ? { loopBars: bars } : {}),
       }
     }),
 
+  /*
+   * Opening a screen **is** an interaction, so it re-arms the browse timer.
+   *
+   * Without this the timer belonged to whichever list armed it: browse Sound,
+   * then reach for Bass two seconds later, and Bass's list vanished a fraction
+   * of a second after opening because Sound's timer was still running and the
+   * effect had no reason to restart. The knob you just reached for is the last
+   * thing that should be timing out.
+   *
+   * It lives here rather than at the call sites because there are several —
+   * the digit row, the hold menus, `Exit` — and every one of them is a hand
+   * doing something.
+   */
   setScreenList: (screenList) =>
     set(
       screenList === null
         ? { screenList, fxAdjusting: false, performAdjusting: false }
-        : { screenList },
+        : { screenList, screenTouched: performance.now() },
     ),
   showGlance: (value, label, level, secondary) =>
     set({ glance: { value, label, level, secondary, stamp: performance.now() } }),
   clearGlance: () => set({ glance: null }),
+  touchScreen: () => set({ screenTouched: performance.now() }),
 }))
 
 /** Which pitch class each physical key plays, given the current layout. */

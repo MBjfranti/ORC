@@ -34,14 +34,15 @@ import { FX_IDS, FX_LABEL, usePanel } from '../state/panel.js'
 import type { FxId } from '../state/panel.js'
 import { Dial } from './Dial.js'
 import {
-  BASS_MODE_LIST,
   columnIndices,
   ENCODERS,
   encoderLegend,
+  isBrowse,
   isPlaceholder,
   loopRows,
   rowIndices,
   SCREEN_AFTER,
+  screenLabel,
   screenRows,
   turnEncoder,
 } from './encoders.js'
@@ -420,6 +421,32 @@ function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
   }, [glance?.stamp, glance, clearGlance])
 
   /*
+   * A *browse* list expires too. Menus do not.
+   *
+   * Turning Sound to pick a patch is choosing a value, and once you have
+   * chosen, being left staring at the list is the panel refusing to get out of
+   * the way. A menu is different: it is somewhere you are, and you leave it by
+   * saying so (research/13 §B.6).
+   */
+  /*
+   * `screenList` is in the dependencies as well as `screenTouched`, and both
+   * are load-bearing. Opening a different encoder's list re-stamps
+   * `screenTouched` — that is what makes reaching for a second knob count as an
+   * interaction rather than inheriting the first one's expiring timer. Keeping
+   * the index here too means the effect tears down and re-arms even in the
+   * pathological case where two opens land on the same millisecond.
+   */
+  const open = s.screenList
+  const browsing = isBrowse(open)
+  const touched = s.screenTouched
+  const setScreenList = s.setScreenList
+  useEffect(() => {
+    if (!browsing) return
+    const timer = window.setTimeout(() => setScreenList(null), BROWSE_MS)
+    return () => window.clearTimeout(timer)
+  }, [browsing, open, touched, setScreenList])
+
+  /*
    * The quick key select prompt outranks everything, because it is the one
    * screen that is *waiting on you* — the keybed is in a different mode until
    * it is answered, and hiding that behind a glance would be a trap (§9.2).
@@ -468,7 +495,9 @@ function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
         />
         <div className="loop-panel">
           {s.loopState === 'recording' || s.loopState === 'counting' ? (
-            <span className="loop-rec">{s.loopState === 'counting' ? 'Count' : 'Rec'}</span>
+            <span className="loop-rec">
+              {s.loopState === 'counting' ? (s.loopCount || BEATS_IN) : 'Rec'}
+            </span>
           ) : (
             <ScreenList rows={loopRows(s)} cursor={s.loopCursor} visible={3} />
           )}
@@ -488,11 +517,8 @@ function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
     )
   }
 
-  const label =
-    s.screenList === BASS_MODE_LIST ? 'Bass plays' : (ENCODERS[s.screenList!]?.label ?? 'Display')
-
   return (
-    <div className="screen screen-stat" role="status" aria-label={label}>
+    <div className="screen screen-stat" role="status" aria-label={screenLabel(s.screenList!)}>
       <ScreenList rows={view.rows} cursor={view.cursor} />
     </div>
   )
@@ -524,44 +550,69 @@ function LoopRing({ bars, length, state }: { bars: number | null; length: number
   const running = state === 'playing' || state === 'recording' || state === 'overdubbing'
 
   return (
-    <svg className="loop-ring" viewBox="0 0 128 128" aria-hidden>
-      <defs>
-        {/* 1px 50% checkerboard, the display's only intermediate tone. */}
-        <pattern id="ring-dither" width="2" height="2" patternUnits="userSpaceOnUse">
-          <rect width="1" height="1" fill="#fff" />
-          <rect x="1" y="1" width="1" height="1" fill="#fff" />
-        </pattern>
-      </defs>
+    <>
+      <svg className="loop-ring" viewBox="0 0 128 128" aria-hidden>
+        <defs>
+          {/* 1px 50% checkerboard, the display's only intermediate tone. */}
+          <pattern id="ring-dither" width="2" height="2" patternUnits="userSpaceOnUse">
+            <rect width="1" height="1" fill="#fff" />
+            <rect x="1" y="1" width="1" height="1" fill="#fff" />
+          </pattern>
+        </defs>
+        {/* What is left to play. */}
+        <path className="ring-path" d={RING} stroke="url(#ring-dither)" />
+      </svg>
 
-      {/* What is left to play. */}
-      <path className="ring-path" d={RING} stroke="url(#ring-dither)" />
+      {/*
+        What has elapsed — a conic sweep rather than a dashed stroke.
 
-      {/* What has elapsed, filling clockwise from twelve o'clock. */}
-      <path
-        className="ring-path ring-fill"
-        d={RING}
-        stroke="#fff"
-        pathLength={100}
-        strokeDashoffset={DASH_ORIGIN}
+        A conic gradient starts at twelve o'clock and runs clockwise by
+        definition, which is exactly what §C.4 measured and is not something
+        that has to be discovered. The dashed version needed an empirical
+        quarter-turn correction to start in the right place, and that
+        correction then clipped the final quarter: shifting a dash window along
+        an open path runs it off the end.
+
+        It sweeps by *angle* where the manual measured *perimeter*. On a square
+        those differ, but at the one point p18b pins down the two readings are
+        30.9% and 32% — inside the width of the measurement itself.
+      */}
+      <div
+        className="ring-sweep"
         data-running={running}
         data-paused={state === 'paused'}
         style={{ ['--pass' as string]: `${length || 1}s` }}
+        aria-hidden
       />
 
-      {/* The bar gaps, cut through both layers. One lands on twelve o'clock,
-          which is what PDF p18a shows. */}
-      <path
-        className="ring-path"
-        d={RING}
-        stroke="#000"
-        pathLength={100}
-        strokeDasharray={`${GAP} ${100 / segments - GAP}`}
-        strokeDashoffset={DASH_ORIGIN + GAP / 2}
-      />
+      <svg className="loop-ring" viewBox="0 0 128 128" aria-hidden>
 
-      {/* The panel the menu is drawn on. */}
-      <rect x="17" y="17" width="94" height="94" rx="6" fill="#000" />
-    </svg>
+      {/*
+        The bar gaps, cut through both layers. One lands on twelve o'clock,
+        which is what PDF p18a shows.
+
+        Drawn as radial ticks rather than as gaps in a dash pattern. A dash gap
+        is measured along the *centreline*, and at a corner the outer edge has
+        four times the centreline's radius — so a 3px gap ballooned into a
+        13px wedge at every corner, which is exactly where the gaps land once
+        you get past four bars.
+      */}
+      {ringTicks(segments).map((t, i) => (
+        <rect
+          key={i}
+          x={-GAP_PX / 2}
+          y={-8.5}
+          width={GAP_PX}
+          height={17}
+          fill="#000"
+          transform={`translate(${t.x} ${t.y}) rotate(${t.angle})`}
+        />
+      ))}
+
+        {/* The panel the menu is drawn on. */}
+        <rect x="17" y="17" width="94" height="94" rx="6" fill="#000" />
+      </svg>
+    </>
   )
 }
 
@@ -576,8 +627,52 @@ const RING =
   'M 64 8.5 H 117 A 2.5 2.5 0 0 1 119.5 11 V 117 A 2.5 2.5 0 0 1 117 119.5 ' +
   'H 11 A 2.5 2.5 0 0 1 8.5 117 V 11 A 2.5 2.5 0 0 1 11 8.5 H 64'
 
-/** 3px of black, as a share of the centreline's ~440px perimeter. */
-const GAP = 0.7
+/** 3px of black, cutting the full 17px thickness — measured, §C.4. */
+const GAP_PX = 3
+
+/**
+ * Where each bar boundary sits on the ring, and which way it faces.
+ *
+ * Measured off the path itself rather than worked out by hand: the ring is a
+ * rounded rectangle, so the mapping from "a fraction of the way round" to a
+ * point and a tangent is not something worth deriving twice. The path is
+ * static, so this is computed once per segment count and cached.
+ *
+ * The angle comes from a pair of neighbouring points rather than from a
+ * formula, which keeps it right through the corner arcs where the direction is
+ * turning fastest — and the corners are precisely where the gaps land at eight
+ * and sixteen bars.
+ */
+const tickCache = new Map<number, { x: number; y: number; angle: number }[]>()
+
+function ringTicks(segments: number): { x: number; y: number; angle: number }[] {
+  const cached = tickCache.get(segments)
+  if (cached) return cached
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  path.setAttribute('d', RING)
+  const total = path.getTotalLength()
+
+  const ticks = Array.from({ length: segments }, (_, i) => {
+    const at = (i / segments) * total
+    const here = path.getPointAtLength(at)
+    const ahead = path.getPointAtLength((at + 1) % total)
+    const angle = (Math.atan2(ahead.y - here.y, ahead.x - here.x) * 180) / Math.PI
+    /*
+     * The tick is 3 wide and 17 tall, and it turns to face *along* the ring —
+     * so its 3px dimension lies across the direction of travel and its 17px
+     * dimension cuts the full thickness, which is what §C.4 measured.
+     *
+     * A quarter turn too far and it lies flat along the ring instead: a 17px
+     * smear down the middle of the band rather than a slot through it. Which
+     * is what the first version did.
+     */
+    return { x: here.x, y: here.y, angle }
+  })
+
+  tickCache.set(segments, ticks)
+  return ticks
+}
 
 /**
  * A quarter turn, because the browser does not start dashing where the path
@@ -599,6 +694,19 @@ const DASH_ORIGIN = -25
 
 /** How long a value readout stays up after the last turn. research/13 §B.6. */
 const GLANCE_MS = 1200
+
+/**
+ * How long a browse list lingers after you stop turning.
+ *
+ * Longer than the glance, because a list is something you are reading rather
+ * than a number you are watching move — but it does expire, because picking a
+ * sound and then being stuck looking at the list is the panel getting in the
+ * way of the instrument.
+ */
+const BROWSE_MS = 2600
+
+/** Beats in the count-in bar. */
+const BEATS_IN = 4
 
 /**
  * How long the chord stays up after you let go.

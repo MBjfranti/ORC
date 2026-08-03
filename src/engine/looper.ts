@@ -18,6 +18,8 @@ import {
   withLayer,
 } from '../core/looper.js'
 import type { Grid, Loop, LoopEvent, Stream } from '../core/looper.js'
+import { METERS } from '../core/beats.js'
+import type { Meter } from '../core/beats.js'
 import type { Synth } from './synth.js'
 
 export type LoopState = 'empty' | 'counting' | 'recording' | 'playing' | 'overdubbing' | 'paused'
@@ -29,14 +31,34 @@ export interface LoopView {
   /** 0–1 through the current pass, for the progress ring. */
   readonly position: number
   readonly lengthSeconds: number
+  /** Beats left in the count-in, 4 down to 1. Zero when not counting. */
+  readonly countBeat: number
 }
 
 export interface LoopConfig {
   readonly bpm: number
   readonly grid: Grid
+  /**
+   * The time signature, which decides both how long a bar is and how many
+   * clicks count you into it. Six-eight is six clicks and three quarter notes,
+   * and using one number for both is how a 6/8 loop comes out twice the length
+   * it should be.
+   */
+  readonly meter?: Meter
   readonly onChange?: () => void
   /** Asked to click for one bar before a bar-locked recording starts. */
   readonly countIn?: (bars: number) => void
+  /**
+   * Recording has actually started — the count-in is over.
+   *
+   * > "Metronome sounds during Loop record count-in, **then plays the Beat if
+   * > selected**" — v3.90 (research/08)
+   *
+   * That handoff is the reason this exists: the click counts you in and the
+   * drums take over on the downbeat, which is what makes a bar-locked loop
+   * feel like it is being played to something rather than into silence.
+   */
+  readonly onRecord?: () => void
 }
 
 export class Looper {
@@ -48,19 +70,29 @@ export class Looper {
   private passStart = 0
   private scheduleId: number | undefined
   private countInId: number | undefined
+  private countBeat = 0
 
   private bpm = 96
   private grid: Grid = 'off'
+  private meter: Meter = METERS[0]!
   private onChange: (() => void) | undefined
   private countIn: ((bars: number) => void) | undefined
+  private onRecord: (() => void) | undefined
 
   constructor(private synth: Synth) {}
 
   configure(opts: Partial<LoopConfig>): void {
     if (opts.bpm !== undefined) this.bpm = opts.bpm
     if (opts.grid !== undefined) this.grid = opts.grid
+    if (opts.meter !== undefined) this.meter = opts.meter
     if (opts.onChange !== undefined) this.onChange = opts.onChange
     if (opts.countIn !== undefined) this.countIn = opts.countIn
+    if (opts.onRecord !== undefined) this.onRecord = opts.onRecord
+  }
+
+  /** One bar, in seconds, at the current tempo and time signature. */
+  private barSeconds(bars = 1): number {
+    return barsToSeconds(bars, this.bpm, this.meter.quarters)
   }
 
   view(): LoopView {
@@ -72,6 +104,7 @@ export class Looper {
       layers: this.loop?.layers.length ?? 0,
       position: this.state === 'empty' ? 0 : Math.max(0, Math.min(1, elapsed)),
       lengthSeconds: length,
+      countBeat: this.state === 'counting' ? this.countBeat : 0,
     }
   }
 
@@ -90,7 +123,7 @@ export class Looper {
    */
   arm(bars: number | null): void {
     this.reset()
-    const length = bars === null ? 0 : barsToSeconds(bars, this.bpm)
+    const length = bars === null ? 0 : this.barSeconds(bars)
     this.loop = emptyLoop(length, bars)
 
     if (bars === null) {
@@ -105,9 +138,37 @@ export class Looper {
     // the Waiting Room through the whole bar you are counting.
     this.onChange?.()
     this.countIn?.(1)
+
+    /*
+     * Click the bar in. Four beats, the first accented, so you know where one
+     * is before you have to play it — "metronome sounds during Loop record
+     * count-in" (research/08, v3.90).
+     *
+     * Scheduled ahead as four separate events rather than driven by a timer:
+     * they are audio, so they belong on the audio clock, and a click that
+     * arrives when the browser gets round to it is worse than no click.
+     */
+    const beats = this.meter.beats
+    const beat = this.barSeconds() / beats
+    const start = this.now()
+    for (let i = 0; i < beats; i++) {
+      this.synth.click(start + i * beat, i === 0)
+      /*
+       * Count it down on the screen as well as out loud. **MANUAL SILENT** —
+       * the hardware's count-in is audible and the display is not described, so
+       * this is ours. A bar of silence with nothing moving reads as a hang, and
+       * knowing there are two beats left is the difference between coming in
+       * and missing it.
+       */
+      Tone.getTransport().scheduleOnce(() => {
+        this.countBeat = beats - i
+        this.onChange?.()
+      }, start + i * beat)
+    }
+
     this.countInId = Tone.getTransport().scheduleOnce(
       () => this.begin('recording'),
-      this.now() + barsToSeconds(1, this.bpm),
+      start + this.barSeconds(),
     )
   }
 
@@ -234,6 +295,8 @@ export class Looper {
     this.state = state
     this.passStart = this.now()
     if (this.loop && this.loop.lengthSeconds > 0) this.schedule()
+    // The click has done its job; whatever is meant to take over, takes over.
+    if (state === 'recording') this.onRecord?.()
     // Covers `arm`, `closeFree` and `resume` in one place — every route into a
     // new transport state passes through here.
     this.onChange?.()

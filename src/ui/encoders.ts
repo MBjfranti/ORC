@@ -23,6 +23,7 @@
  * that is printed on the panel.
  */
 
+import { BEATS, beatLabel, clockRow, METERS } from '../core/beats.js'
 import { barsLabel, LOOP_BARS } from '../core/looper.js'
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
 import { looperOrNull } from '../engine/looper.js'
@@ -90,6 +91,16 @@ export interface Encoder {
   }
   /** What the screen shows while this encoder is selected. */
   readonly list?: (s: PanelState) => { rows: Row[]; cursor: number }
+  /**
+   * The list is a *browse*, not a menu — so it expires like a value readout.
+   *
+   * research/13 §B.6 draws the line here: a menu is somewhere you *are* and
+   * stays until you leave it, but a readout of which value is selected is
+   * feedback and should get out of the way once you have chosen. Sound, Bass
+   * and Key browse. The FX rack, the bass behaviour menu and the loop menus are
+   * menus and stay put.
+   */
+  readonly browse?: boolean
   /**
    * The transient value readout raised by turning this knob — research/13 §C.3,
    * measured from the illustrations: a giant number filling 84% of the display
@@ -201,8 +212,20 @@ function loopPress(s: PanelState): void {
   }
 
   if (s.loopScreen === 'save') {
-    // Only `Exit` does anything yet; the ten slots need somewhere to live.
-    if (s.loopCursor === 4) s.setLoopScreen(s.loopState === 'empty' ? 'sync' : 'transport')
+    /*
+     * `Exit` leaves **Loop Mode**, not just this menu — it is the official way
+     * out: "press and hold Loop dial → Loop Menu → Exit" (research/08). The
+     * loop is not destroyed by it: "the loop stays in memory… so pressing Loop
+     * again restarts it", which is what separates this from the hard exit.
+     *
+     * It was returning to the Waiting Room, which left no way out of Loop Mode
+     * at all short of the two-handed shortcut.
+     */
+    if (s.loopCursor === 4) {
+      looper.pause()
+      s.setLoopScreen(null)
+    }
+    // The ten slots still need somewhere to live before the rest can work.
     return
   }
 
@@ -240,6 +263,40 @@ function loopPress(s: PanelState): void {
 const signed = (n: number) =>
   n === 0 ? '00' : `${n > 0 ? '+' : '-'}${String(Math.abs(n)).padStart(2, '0')}`
 
+/** `00`–`99`, the range every volume on this instrument is drawn in (§4.2). */
+const level99 = (n: number) => String(Math.round(n * 99)).padStart(2, '0')
+
+// --- the beat machine ------------------------------------------------------
+
+/**
+ * The BPM dial's list, addressed past the end of the row so it cannot collide
+ * with an encoder's own index — the same trick `BASS_MODE_LIST` plays.
+ *
+ * One list holding two different kinds of thing, because that is how §11.4
+ * describes reaching it: "long press the BPM Dial for one second and **scroll
+ * past the time signatures** to access Beats."
+ */
+export const BEAT_LIST = 101
+
+/**
+ * Signatures, then beats. No value column, deliberately.
+ *
+ * It carried `On` on the running row at first. That cost thirty-four pixels of
+ * every row, and `02 Orchid Bossanova` — the longest name Telepathic actually
+ * give us — was clipped to `02 Orchid Bossa`. Truncating a documented name to
+ * make room for a bit you can hear is the wrong way round: whether a beat is
+ * playing is reported by the encoder's lamp, and by the drums.
+ *
+ * Only the cursor row could ever have been marked anyway. One selection, one
+ * switch — so the mark was always going to land on the row already inverted.
+ */
+export function beatRows(): Row[] {
+  return [
+    ...METERS.map((m) => ({ label: m.label })),
+    ...BEATS.map((_, i) => ({ label: beatLabel(i) })),
+  ]
+}
+
 export const ENCODERS: readonly Encoder[] = [
   // --- the top row ---------------------------------------------------------
   {
@@ -264,6 +321,16 @@ export const ENCODERS: readonly Encoder[] = [
       rows: SOUNDS.map((_, i) => ({ label: soundLabel(i) })),
       cursor: s.soundIndex,
     }),
+    /*
+     * Browsing is a *value*, not a menu, so its screen expires.
+     *
+     * research/13 §B.6 keeps menus sticky and lets value readouts time out, and
+     * PDF p5 shows Sound's own readout as a glance — `20` over `Sound`. Picking
+     * a sound and being left staring at the list is the wrong end of that
+     * distinction: you chose, so the panel should get out of the way and show
+     * you what you are playing again.
+     */
+    browse: true,
     // Fifty of them, so the dial wants real travel rather than a hair-trigger.
     sensitivity: 8,
   },
@@ -397,6 +464,7 @@ export const ENCODERS: readonly Encoder[] = [
       const i = Math.max(0, Math.min(KEYS.length - 1, keyIndex(s.key) + d))
       s.setKey(KEYS[i]!)
     },
+    browse: true,
     press: (s) => {
       s.toggleKeyMode()
       // v3.90: "Turning Key off now shows an explicit `Off` on the display."
@@ -446,6 +514,7 @@ export const ENCODERS: readonly Encoder[] = [
     // hold-then-turn means on the hardware: one encoder, two lists, and the
     // one on screen is the one you are turning.
     turn: (s, d) => (s.screenList === BASS_MODE_LIST ? s.cycleBassMode(d) : s.cycleBassSound(d)),
+    browse: true,
     press: (s) => s.toggleBass(),
     lamp: (s) => s.bassOn, // inferred from the idiom, not documented
     hold: (s) => s.setScreenList(BASS_MODE_LIST),
@@ -516,10 +585,16 @@ export const ENCODERS: readonly Encoder[] = [
      * per-function tempo, which is why turning this while a loop is armed
      * changes how long a bar is.
      *
-     * Built: the tempo. Not built, and both needing engines we do not have —
-     * press toggles the metronome or starts and stops a Beat, hold lists the
-     * twenty pre-programmed Beats, and hold-and-turn sets their volume
-     * (research/08 §Beat machine).
+     *   turn, list shut → the tempo, 40–220
+     *   turn, list open → the one list: signatures, then the twenty beats
+     *   press           → start or stop whichever the cursor is pointed at
+     *   hold            → open that list, or close it
+     *   hold and turn   → the volume of that same thing
+     *
+     * The beat list is addressed separately from this encoder's own index so
+     * that the dial's *primary* job survives having it open — reaching for BPM
+     * must never be the reason you cannot change the tempo. Bass does the same
+     * thing with its behaviour menu, and for the same reason.
      */
     id: 'bpm',
     label: 'BPM',
@@ -527,8 +602,21 @@ export const ENCODERS: readonly Encoder[] = [
     place: 'row',
     digit: 7,
     cap: 'black',
-    turn: (s, d) => s.setBpm(s.bpm + d),
-    readout: (s) => ({ value: String(s.bpm), label: 'BPM' }),
+    turn: (s, d) => (s.screenList === BEAT_LIST ? s.cycleClock(d) : s.setBpm(s.bpm + d)),
+    press: (s) => s.toggleClock(),
+    hold: (s) => s.setScreenList(s.screenList === BEAT_LIST ? null : BEAT_LIST),
+    lamp: (s) => s.clockOn,
+    // The click and the beat have separate levels, so the label has to say
+    // which one the gesture is about to move (§4.2).
+    secondary: {
+      label: 'Volume',
+      turn: (s, d) => s.nudgeClockLevel(d),
+      value: (s) => level99(s.beatIndex === null ? s.clickLevel : s.beatLevel),
+    },
+    // The tempo, unless its own list is up — the list already shows what the
+    // knob is doing, and a number over the top of it would say less.
+    readout: (s) =>
+      s.screenList === BEAT_LIST ? undefined : { value: String(s.bpm), label: 'BPM' },
     sensitivity: 6,
   },
   { id: 'options', label: 'Options', shown: true, place: 'row', digit: 8, cap: 'black' },
@@ -617,8 +705,28 @@ export function screenRows(
 ): { rows: Row[]; cursor: number } | null {
   if (open === null) return null
   if (open === BASS_MODE_LIST) return menuList(s)
+  if (open === BEAT_LIST) return { rows: beatRows(), cursor: clockRow(s.meter, s.beatIndex) }
   return ENCODERS[open]?.list?.(s) ?? null
 }
+
+/** What the screen is titled, for whatever is open. */
+export function screenLabel(open: number): string {
+  if (open === BASS_MODE_LIST) return 'Bass plays'
+  if (open === BEAT_LIST) return 'Beats'
+  return ENCODERS[open]?.label ?? 'Display'
+}
+
+/**
+ * Whether the open screen expires, or is somewhere you *are*.
+ *
+ * research/13 §B.6 draws the line at menu versus value: the FX rack, the bass
+ * behaviour menu and the loop menus stay until you leave them, and everything
+ * that is a list of values you are choosing between gets out of the way once
+ * you have stopped choosing. The beat list is the second kind — picking a
+ * groove is picking a value, and it is not a place you live.
+ */
+export const isBrowse = (open: number | null): boolean =>
+  open !== null && (open === BEAT_LIST || ENCODERS[open]?.browse === true)
 
 /** A knob that is on the panel but not built yet. */
 export const isPlaceholder = (e: Encoder) => e.turn === undefined
@@ -634,14 +742,28 @@ export function turnEncoder(index: number, s: PanelState, delta: number): void {
   const encoder = ENCODERS[index]
   if (!encoder?.turn) return
   encoder.turn(s, delta)
-  if (!encoder.readout) return
   const next = usePanel.getState()
+  /*
+   * Every turn resets the browse timer, so a list only expires once you have
+   * stopped moving through it.
+   *
+   * Keyed on **what is open**, not on which knob is being turned. Those come
+   * apart on BPM: the beat list is a browse but the encoder is not flagged as
+   * one, because its own list is the tempo. Keyed the old way, scrolling
+   * twenty-six rows re-armed nothing and the list closed underneath you
+   * two and a half seconds in — every time, since the list is longer than the
+   * timer.
+   */
+  if (isBrowse(next.screenList)) next.touchScreen()
+  if (!encoder.readout) return
   // A readout may decline — FX has nothing to add while its own menu is the
   // thing on screen, and covering a live list with a number would be worse
   // than saying nothing.
   const shown = encoder.readout(next)
   if (shown) next.showGlance(shown.value, shown.label, shown.level)
 }
+
+
 
 /** `Sound (1)`, or just `Chord Voicing` for a knob with no number. */
 export function encoderLegend(index: number): string {
