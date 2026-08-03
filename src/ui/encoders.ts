@@ -230,8 +230,20 @@ export function loopRows(s: PanelState): Row[] {
  * "The loop stays in memory… pressing Loop again restarts it" (research/08) —
  * so coming back to a loop lands on its transport.
  */
-const enterLoop = (s: PanelState): void =>
+const enterLoop = (s: PanelState): void => {
+  /*
+   * Already inside: entering again would throw away which screen you are on.
+   *
+   * The hold that opens the Save menu does not claim focus — only a tap does —
+   * so holding `6` from a cold focus opened the menu, and the very next tap was
+   * read as *reaching* for the knob rather than pressing it. That reach called
+   * this, which overwrote `save` with the transport. Scrolling to `Load Loop`
+   * and pressing therefore bounced you out of the menu instead of confirming,
+   * which reads as the press doing something random rather than nothing.
+   */
+  if (s.loopScreen !== null) return
   s.setLoopScreen(s.loopState === 'empty' ? 'sync' : 'transport')
+}
 
 /**
  * Whether `Stop` is the thing on offer — a free recording still open, or an
