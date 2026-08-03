@@ -326,7 +326,7 @@ same mark the FX rack puts on an effect it does not have:
 | `Metronome Click` | **built** — `Beep` or the kit's own closed hat. Measured as genuinely two sounds: centroid 205 against 418 |
 | `Battery` | **built** — read from the browser. A laptop has one, so this is answerable rather than imitated |
 | `Version` | **built** — the app's version standing in for §14.13's firmware version |
-| `View` | inert — the five other view modes are the open item below |
+| `View` | **built** — all six of §14.2 |
 | `Play Style` | **built** — Simple / Advanced / Free, see below |
 | `Extension Addition` | **built** — `Add Note` or `Play Chord`, scoped to Advanced and Free per §14.6 |
 | `Single Note Mode` | **built** — `Split Keyboard` or `Full Octave Keyboard`, see below |
@@ -427,6 +427,35 @@ keyboard", but the mechanism for choosing is the Chord Voicing dial's own
 position on hardware, and this keyboard has no equivalent free axis —
 **MANUAL SILENT for our layout**. The mode is real; the movable point is not
 built.
+
+### View modes (§14.2)
+
+All six, composed from three pieces — chord symbol, keyboard, note list —
+because the manual's own descriptions compose that way: `Geek Out` is defined as
+"maximum information, **including** the keyboard, chord name, and notes", which
+is the union of the other three rather than a seventh layout. `viewPieces` in
+`core/options.ts` is that mapping, pure and tested, including a test that Geek
+Out *stays* the union.
+
+`React` is the oscilloscope. It draws on a canvas from a rAF loop entirely
+outside React — a waveform is sixty new frames a second and pushing that through
+the store would re-render the panel on every one, the same reason the looping
+border is a CSS animation. The analyser is built on first use and only while
+that view is showing, so the other five cost nothing.
+
+The keyboard reuses the quick-key-select glyph, lighting **pitch classes** so a
+chord voiced across two octaves lights each of its notes once — it shows *which
+notes*, not where they sit.
+
+**Verified structurally, not with content.** The mode-to-pieces composition was
+checked in the browser and matches §14.2 exactly, and the mapping is unit
+tested. What could **not** be checked here is the populated rendering: `sounding`
+reaches React through `Instrument.notify()`, which delivers on an animation
+frame, and **frames do not run in this environment** — a rAF probe hung for 45
+seconds with `document.hasFocus()` reporting true. Trusted input did not wake
+it. The chord markup is unchanged from the already-working playing screen and
+`noteWithOctave` is tested core, but the lit keys, the note list and the
+oscilloscope trace have not been seen.
 
 ## Still not built
 

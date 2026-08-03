@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildChord, chordName } from './chord.js'
+import { VIEW_MODES, viewPieces } from './options.js'
 import { resolveChord, resolveSingleNote } from './resolve.js'
 import { SECRET_CHORDS, secretFor, secretsEnabled } from './secret.js'
 import type { ChordType, Extension, PitchClass } from './types.js'
@@ -133,5 +134,43 @@ describe('single note mode', () => {
       const at = resolveSingleNote(split, 3, split)
       expect(at - below).toBe(13)
     }
+  })
+})
+
+describe('view modes', () => {
+  it('composes each of the six the way §14.2 describes them', () => {
+    const at = (i: number) => viewPieces(i)
+    // "an oscilloscope" — and nothing shares the panel with a trace.
+    expect(at(0)).toEqual({ scope: true, chord: false, keyboard: false, notes: false })
+    // "only the current chord being played in large text"
+    expect(at(1)).toEqual({ scope: false, chord: true, keyboard: false, notes: false })
+    // "a visual keyboard with highlighted notes being played"
+    expect(at(2)).toEqual({ scope: false, chord: false, keyboard: true, notes: false })
+    // "both the keyboard and the chord name"
+    expect(at(3)).toEqual({ scope: false, chord: true, keyboard: true, notes: false })
+    // "the chord name and the individual notes being played"
+    expect(at(4)).toEqual({ scope: false, chord: true, keyboard: false, notes: true })
+    // "maximum information, including the keyboard, chord name, and notes"
+    expect(at(5)).toEqual({ scope: false, chord: true, keyboard: true, notes: true })
+  })
+
+  it('makes Geek Out the union of the other three, not a seventh layout', () => {
+    // The manual defines it that way — "including the keyboard, chord name, and
+    // notes" — so if it ever stops being the union, the description is wrong.
+    const geek = viewPieces(5)
+    const union = {
+      scope: false,
+      chord: viewPieces(1).chord,
+      keyboard: viewPieces(2).keyboard,
+      notes: viewPieces(4).notes,
+    }
+    expect(geek).toEqual(union)
+  })
+
+  it('falls back to Chord, which is the inferred default', () => {
+    // research/13 §A.2: "the only mode that shows nothing but the instrument's
+    // core output". An out-of-range index must not blank the screen.
+    expect(viewPieces(99)).toEqual(viewPieces(1))
+    expect(VIEW_MODES).toHaveLength(6)
   })
 })

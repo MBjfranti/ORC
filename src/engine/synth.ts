@@ -76,6 +76,7 @@ class Synth {
   /** Loop playback, one synth per preset a layer actually uses. */
   private pool = new Map<number, Tone.PolySynth>()
   private bassPool = new Map<number, Tone.MonoSynth>()
+  private analyser: Tone.Analyser | undefined
 
   private started = false
   private prepared = false
@@ -764,6 +765,24 @@ class Synth {
       at,
       velocity,
     )
+  }
+
+  /**
+   * A reader for the master waveform, for the `React` view (SS14.2).
+   *
+   * The analyser is built on first ask and then kept, because building one per
+   * frame would be absurd and building one at startup would tax every session
+   * for a view most of them never open. Returns `undefined` before the graph
+   * exists, which the caller draws as an empty screen rather than a crash.
+   */
+  scope(): (() => Float32Array) | undefined {
+    if (!this.started) return undefined
+    if (!this.analyser) {
+      this.analyser = new Tone.Analyser({ type: 'waveform', size: 256 })
+      this.master.connect(this.analyser)
+    }
+    const analyser = this.analyser
+    return () => analyser.getValue() as Float32Array
   }
 
   /** Silence the loop without touching what the hands are holding. */

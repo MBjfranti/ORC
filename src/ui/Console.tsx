@@ -26,9 +26,12 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
 import { barsLabel, LOOP_BARS } from '../core/looper.js'
-import { noteName } from '../core/spelling.js'
+import { noteName, noteWithOctave } from '../core/spelling.js'
 import type { Sounding } from '../engine/instrument.js'
 import { keyIndex, KEYS, MODE_LABEL, MODE_SUFFIX } from '../core/types.js'
+import type { Key } from '../core/types.js'
+import { viewPieces } from '../core/options.js'
+import { getSynth } from '../engine/synth.js'
 import { soundNumber, SOUNDS } from '../engine/sounds.js'
 import { FX_IDS, FX_LABEL, usePanel } from '../state/panel.js'
 import type { FxId } from '../state/panel.js'
@@ -746,27 +749,163 @@ function ScreenPlaying({ sounding }: { sounding: Sounding | undefined }) {
   const key = usePanel((s) => s.key)
   const keyMode = usePanel((s) => s.keyMode)
   const transpose = usePanel((s) => s.transpose)
+  const view = usePanel((s) => s.optionValue.view ?? 1)
   const chord = useLinger(sounding, LINGER_MS)
 
   return (
     <div className="scr-play">
+      {/*
+        The status rail, measured on PDF p15b: y=0..10, flush to the top, white
+        on black and *not* an inverted bar. Everything below it — y=11..127 — is
+        "the view", and which view is `Options -> View` (SS14.2).
+      */}
       <div className="scr-rail">
         <span>{keyMode ? `${noteName(key.tonic, key)} ${MODE_LABEL[key.mode]}` : ''}</span>
         {/* MANUAL SILENT on whether a zero shows. Left off: a rail that always
             reads `Trans +0` is a rail you stop reading. */}
         <span>{transpose === 0 ? '' : `Trans ${transpose > 0 ? '+' : ''}${transpose}`}</span>
       </div>
-      <div className="scr-chord">
-        {chord && (
-          <span>
-            {chord.root}
-            {chord.base}
-            {chord.sup && <sup>{chord.sup}</sup>}
-          </span>
-        )}
-      </div>
+      <ScreenView mode={view} chord={chord} keySig={keyMode ? key : undefined} />
     </div>
   )
+}
+
+/**
+ * The six View modes (SS14.2), filling the display below the status rail.
+ *
+ * > `React` "displays an oscilloscope"; `Chord` "only the current chord being
+ * > played in large text"; `Keyboard` "a visual keyboard with highlighted notes
+ * > being played"; `Chord & Keyboard` "both"; `Notes` "the chord name and the
+ * > individual notes… in written format"; `Geek Out` "maximum information,
+ * > including the keyboard, chord name, and notes."
+ *
+ * They compose from three pieces rather than six layouts, because that is what
+ * the manual's own descriptions do — `Geek Out` is named as the union of the
+ * other three, so building it as one is how the descriptions stay true.
+ */
+function ScreenView({
+  mode,
+  chord,
+  keySig,
+}: {
+  mode: number
+  chord: Sounding | undefined
+  keySig: Key | undefined
+}) {
+  const pieces = viewPieces(mode)
+  if (pieces.scope) return <ScreenScope />
+
+  // Geek Out fits three things into 117px, so the chord symbol gives way first.
+  const dense = pieces.chord && pieces.keyboard && pieces.notes
+
+  return (
+    <div className="scr-view" data-dense={dense}>
+      {pieces.chord && (
+        <div className="scr-chord">
+          {chord && (
+            <span>
+              {chord.root}
+              {chord.base}
+              {chord.sup && <sup>{chord.sup}</sup>}
+            </span>
+          )}
+        </div>
+      )}
+      {pieces.keyboard && <ScreenKeys notes={chord?.notes} keySig={keySig} />}
+      {pieces.notes && (
+        <div className="scr-notes">
+          {chord?.notes.map((n, i) => (
+            <span key={i}>{noteWithOctave(n, keySig)}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One octave with the sounding notes knocked out.
+ *
+ * The same glyph the quick-key-select prompt draws, and for the same reason a
+ * black key sits on the *boundary* between two white keys rather than taking
+ * its own share of twelve — see `ScreenPrompt`.
+ */
+const BLACK_AFTER = [0, 1, 3, 4, 5]
+const WHITE_PC = [0, 2, 4, 5, 7, 9, 11]
+const BLACK_PC: Record<number, number> = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }
+
+function ScreenKeys({ notes, keySig }: { notes: readonly number[] | undefined; keySig: Key | undefined }) {
+  void keySig
+  // Pitch classes, so a chord voiced across two octaves lights both its keys
+  // once — the keyboard is one octave and shows *which notes*, not where.
+  const lit = new Set((notes ?? []).map((n) => ((n % 12) + 12) % 12))
+  return (
+    <div className="scr-keys" aria-hidden>
+      {WHITE_PC.map((pc, i) => (
+        <span key={i} className="scr-key" data-lit={lit.has(pc)} />
+      ))}
+      {BLACK_AFTER.map((after) => (
+        <span
+          key={after}
+          className="scr-key-black"
+          data-lit={lit.has(BLACK_PC[after]!)}
+          style={{ ['--after' as string]: String(after) }}
+        />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * `React` — "an oscilloscope for a real-time visual representation of the
+ * waveform" (SS14.2).
+ *
+ * Drawn on a canvas from a rAF loop that lives entirely outside React. A
+ * waveform is sixty new frames a second and pushing that through the store
+ * would re-render the whole panel on every one of them — the same reason the
+ * looping border is a CSS animation rather than rendered state.
+ *
+ * The analyser is only attached while this view is showing, so choosing any
+ * other mode costs nothing at all.
+ */
+function ScreenScope() {
+  const canvas = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const el = canvas.current
+    if (!el) return
+    const ctx = el.getContext('2d')
+    if (!ctx) return
+
+    const scope = getSynth().scope()
+    let raf = 0
+    const draw = () => {
+      raf = requestAnimationFrame(draw)
+      const data = scope?.()
+      const { width, height } = el
+      ctx.clearRect(0, 0, width, height)
+      if (!data) return
+      ctx.beginPath()
+      for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * width
+        // Clamped, because a loud patch through the drive can exceed +/-1 and a
+        // trace that leaves the box reads as a broken screen rather than a hot
+        // signal.
+        const y = height / 2 - Math.max(-1, Math.min(1, data[i]!)) * (height / 2 - 1)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+    raf = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  // Backing store at the panel's own resolution: 128 wide, 117 tall below the
+  // rail. Scaled up by CSS, so the trace keeps the display's chunky pixels.
+  return <canvas ref={canvas} className="scr-scope" width={128} height={117} aria-hidden />
 }
 
 /**

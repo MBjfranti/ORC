@@ -1719,6 +1719,72 @@ body {
   text-shadow: none;
 }
 
+/* --- the View modes (§14.2) -----------------------------------------------
+ *
+ * Everything below the status rail — y=11..127 of the 128px panel, so 117px to
+ * hold whichever of the six is selected. They stack, because `Geek Out` is the
+ * union of the other three and the manual describes it that way.
+ */
+
+.scr-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--px) * 6);
+  padding: calc(var(--px) * 4) calc(var(--px) * 6);
+}
+
+/* Three things in 117px. The chord symbol yields first — it is the one whose
+   information is also carried by the note list beneath it. */
+.scr-view[data-dense='true'] .scr-chord {
+  font-size: calc(var(--px) * 30);
+  flex: none;
+}
+
+.scr-view[data-dense='true'] .scr-keys {
+  height: calc(var(--px) * 34);
+}
+
+/* The written note list — `Notes` and `Geek Out`. */
+.scr-notes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 calc(var(--px) * 7);
+  font-family: var(--mono);
+  font-size: calc(var(--px) * 14);
+  line-height: 1.15;
+}
+
+/*
+ * A sounding key is knocked out — white keys go black and black keys go white.
+ *
+ * Inversion is the only emphasis a 1-bit panel has, and it is what the display
+ * already uses for a selected list row, so a lit key reads the same way.
+ */
+.scr-key[data-lit='true'] {
+  background: #000;
+  outline: calc(var(--px) * 1) solid #fff;
+  outline-offset: calc(var(--px) * -1);
+}
+
+.scr-key-black[data-lit='true'] {
+  background: #fff;
+  outline: calc(var(--px) * 1) solid #000;
+  outline-offset: calc(var(--px) * -1);
+}
+
+/* `React` — the oscilloscope. Backing store is the panel's own 128x117, scaled
+   up by CSS so the trace keeps the display's pixels rather than smoothing. */
+.scr-scope {
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
 /* --- the quick key select prompt (§9.2) ----------------------------------- */
 
 .scr-prompt {

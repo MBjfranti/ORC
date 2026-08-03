@@ -78,10 +78,11 @@ export const OPTIONS: readonly OptionRow[] = [
     id: 'view',
     label: 'View',
     kind: 'enum',
-    // §14.2. Only the chord readout exists; the other five are the open item in
-    // research/16.
+    // §14.2, all six. They compose from three pieces — chord symbol, keyboard,
+    // note list — because the manual's own descriptions do: `Geek Out` is named
+    // as the union of the other three.
     values: ['React', 'Chord', 'Keyboard', 'Chord & Keyboard', 'Notes', 'Geek Out'],
-    built: false,
+    built: true,
   },
   // §14.3 — routing between built-in speakers and a headphone jack. A browser
   // has neither to choose between; the OS owns that.
@@ -183,6 +184,50 @@ export const OPTIONS: readonly OptionRow[] = [
   // §14.14. There is no firmware to receive.
   { id: 'upgradeFirmware', label: 'Upgrade firmware', kind: 'action', built: false },
 ]
+
+/**
+ * What each View mode puts on the screen — §14.2.
+ *
+ * Pure, and separate from the component, because it is the one part of the
+ * display that is *logic* rather than markup: six modes composed from three
+ * pieces. The manual's own descriptions compose the same way — `Geek Out` is
+ * defined as "maximum information, **including** the keyboard, chord name, and
+ * notes", which is the union of the other three rather than a seventh layout.
+ */
+export interface ViewPieces {
+  /** An oscilloscope, and nothing else — `React` is the only exclusive mode. */
+  readonly scope: boolean
+  readonly chord: boolean
+  readonly keyboard: boolean
+  readonly notes: boolean
+}
+
+export const VIEW_MODES = ['React', 'Chord', 'Keyboard', 'Chord & Keyboard', 'Notes', 'Geek Out']
+
+export function viewPieces(mode: number): ViewPieces {
+  switch (mode) {
+    // "Displays an oscilloscope for a real-time visual representation of the
+    // waveform" — a trace shares the panel with nothing.
+    case 0:
+      return { scope: true, chord: false, keyboard: false, notes: false }
+    // "Shows a visual keyboard with highlighted notes being played."
+    case 2:
+      return { scope: false, chord: false, keyboard: true, notes: false }
+    // "Displays both the keyboard and the chord name."
+    case 3:
+      return { scope: false, chord: true, keyboard: true, notes: false }
+    // "Displays the chord name *and* the individual notes being played."
+    case 4:
+      return { scope: false, chord: true, keyboard: false, notes: true }
+    // "Maximum information, including the keyboard, chord name, and notes."
+    case 5:
+      return { scope: false, chord: true, keyboard: true, notes: true }
+    // "Displays only the current chord being played in large text." Also the
+    // fallback, since it is research/13 §A.2's inferred default.
+    default:
+      return { scope: false, chord: true, keyboard: false, notes: false }
+  }
+}
 
 /** `Exit` is row one, as PDF p20 shows it — a row, never a gesture. */
 export const OPTIONS_EXIT_ROW = 0
