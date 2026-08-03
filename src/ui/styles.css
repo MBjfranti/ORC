@@ -1884,6 +1884,27 @@ body {
   letter-spacing: 0.04em;
 }
 
+/*
+ * Capturing: `Rec` above, and the row that ends it below.
+ *
+ * `Rec` gives up half its size to make room, because a status word you have
+ * already read is worth less than the only way out of the state it is naming.
+ */
+.loop-panel[data-capturing='true'] {
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(var(--px) * 6);
+}
+
+.loop-rec-small {
+  font-size: calc(var(--px) * 22);
+}
+
+.loop-panel[data-capturing='true'] .scr-list {
+  height: auto;
+  flex: none;
+}
+
 /* --- the playing screen (research/13 §C.2, measured on PDF p15b) ----------
  *
  *   y=0..10    C# Major                    Trans +1

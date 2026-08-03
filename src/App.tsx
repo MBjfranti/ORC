@@ -372,6 +372,10 @@ export default function App() {
       if (s.dialFocus !== index) {
         s.setDialFocus(index)
         s.setScreenList(index)
+        // Reaching for Loop *is* entering Loop Mode — "push or turn the Loop
+        // Dial to access the Waiting Room" (§12.1). Everything else has nothing
+        // to do here, which is the point of a reach.
+        ENCODERS[index]?.reach?.(usePanel.getState())
         return
       }
       ENCODERS[index]?.press?.(s)

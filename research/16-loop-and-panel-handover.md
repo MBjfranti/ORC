@@ -76,6 +76,41 @@ which is exactly where gaps land past four bars. They are now 3×17 rects rotate
 to face along the ring. **The rotation was 90° out at first**, laying them along
 the band instead of across it; the user spotted it.
 
+### Fidelity audit — four gaps, all closed
+
+Checked row by row against §12 and research/13 §M7–M9 after the loop was
+reported as "clunky and hard to get out of". It was, and three of the four were
+real faults rather than polish:
+
+1. **`Stop` did not exist.** The manual names it twice — "press the Loop Dial on
+   **Stop** to stop recording in Free Mode" (§12.4), "…to finish overdubbing"
+   (§12.5) — and §M8 flags it as a selectable state. Without it **an overdub
+   could not be ended at all**: the menu still offered `Overdub`, and pressing it
+   did nothing, because the transport only accepts that from `playing`. You
+   layered until you left Loop Mode. Now `Stop` is the only row while a free
+   recording or an overdub is running. A bar-locked *recording* is deliberately
+   not offered one — §12.4 says "wait for the fixed loop to finish".
+2. **Free mode started on the press, not the first note.** §12.3: "In Free mode,
+   recording starts **as soon as you play the first note**." The new `armed`
+   state waits. Before, however long you took to reach the keys was baked into
+   the top of the loop, and it came round early by exactly that much every pass
+   with nothing on screen to explain it.
+3. **Re-entering Loop Mode with a loop playing landed on the Waiting Room** —
+   where the next press calls `arm`, which resets. Leaving with `Esc` and coming
+   back therefore *destroyed the loop*, from a screen that gave no hint of it.
+   `enterLoop` now goes to the transport when a loop exists.
+4. **Entering took two taps and lied in between.** Tapping `6` drew the sync
+   rows while `loopScreen` was still null — Loop Mode's list with none of its
+   state and no border. §12.1 is "push **or turn** the Loop Dial to access the
+   Waiting Room", one gesture. The encoder lost its `list` (Loop Mode renders
+   from `loopScreen`, and a second source is how the two came apart) and gained
+   a `reach`, which is the keyboard's first tap.
+
+Verified end to end: one tap enters with the ring; Free arms and waits 1.2s
+without starting; the first note starts it; `Stop` closes it; `Overdub` →
+`Rec`/`Stop` → layers 1→2; `Undo` → 2→1 and the row becomes `Clear`; `Esc`
+leaves with the loop still playing; re-entry lands on the transport.
+
 ### Exits — was genuinely broken
 
 `Exit` in the Save menu returned to the Waiting Room instead of leaving Loop

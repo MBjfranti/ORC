@@ -70,6 +70,18 @@ export interface Encoder {
   readonly turn?: (s: PanelState, delta: number) => void
   /** Pressed. */
   readonly press?: (s: PanelState) => void
+  /**
+   * Reached for — the keyboard's first tap, which claims focus.
+   *
+   * A hand on a physical cap says "this knob" without doing anything, so for
+   * almost every encoder this is nothing. Loop is the exception, because on the
+   * hardware there is no such thing as touching the Loop dial without entering:
+   * "**push or turn** the Loop Dial to access the Loop Mode Waiting Room"
+   * (§12.1). Without it, tapping `6` drew the sync list while `loopScreen` was
+   * still null — the rows of Loop Mode with none of its state, no border, and a
+   * press that meant something else than it looked like.
+   */
+  readonly reach?: (s: PanelState) => void
   /** Held. The hardware puts a menu behind this on most encoders. */
   readonly hold?: (s: PanelState) => void
   /**
@@ -177,6 +189,21 @@ export function loopRows(s: PanelState): Row[] {
     ]
   }
 
+  /*
+   * `Stop`, which the manual names twice and we did not have: "press the Loop
+   * Dial on **Stop** to stop recording in Free Mode" (§12.4) and "press the Loop
+   * Dial on **Stop** to finish overdubbing" (§12.5). research/13 §M8 flags it as
+   * a selectable state.
+   *
+   * Without it an overdub could not be ended at all — the menu still offered
+   * `Overdub`, and pressing it did nothing, because the transport only takes
+   * that from `playing`. You were stuck layering until you left Loop Mode.
+   *
+   * A bar-locked *recording* is not stoppable and so is not offered one: §12.4
+   * says "wait for the fixed loop to finish". Overdubs are, in either mode.
+   */
+  if (isStoppable(s)) return [{ label: 'Stop' }]
+
   if (s.loopScreen === 'transport') {
     // PDF p18's second illustration shows exactly these three.
     return [
@@ -191,13 +218,42 @@ export function loopRows(s: PanelState): Row[] {
   return LOOP_BARS.map((bars) => ({ label: barsLabel(bars) }))
 }
 
+/**
+ * Entering Loop Mode, from wherever the transport happens to be.
+ *
+ * The Waiting Room is where you pick a sync length *before* recording, so it is
+ * the wrong room to walk into when a loop is already running — and it was
+ * actively dangerous, because the press that means "record" there calls `arm`,
+ * which resets. Leaving with `Esc` and coming back therefore destroyed the loop
+ * on the next press, having shown you a screen that gave no hint of it.
+ *
+ * "The loop stays in memory… pressing Loop again restarts it" (research/08) —
+ * so coming back to a loop lands on its transport.
+ */
+const enterLoop = (s: PanelState): void =>
+  s.setLoopScreen(s.loopState === 'empty' ? 'sync' : 'transport')
+
+/**
+ * Whether `Stop` is the thing on offer — a free recording still open, or an
+ * overdub running. Read by the rows, the press and the display alike, so the
+ * three cannot disagree about whether that row is there.
+ */
+export function isStoppable(s: PanelState): boolean {
+  if (s.loopState === 'overdubbing') return true
+  return (s.loopState === 'armed' || s.loopState === 'recording') && s.loopBars === null
+}
+
+/** Capturing in any form — the display shows `Rec` throughout (§12.3). */
+export const isCapturing = (s: PanelState): boolean =>
+  s.loopState === 'armed' || s.loopState === 'recording' || s.loopState === 'overdubbing'
+
 /** The press, in whichever of Loop Mode's three screens is up. */
 function loopPress(s: PanelState): void {
   const looper = looperOrNull()
   if (!looper) return
 
   if (s.loopScreen === null) {
-    s.setLoopScreen('sync')
+    enterLoop(s)
     return
   }
 
@@ -216,6 +272,13 @@ function loopPress(s: PanelState): void {
       s.setLoopScreen(null)
     }
     // The ten slots still need somewhere to live before the rest can work.
+    return
+  }
+
+  // `Stop` is the only row while it is up, so the cursor cannot be anywhere
+  // else and there is nothing to switch on.
+  if (isStoppable(s)) {
+    looper.stop()
     return
   }
 
@@ -240,12 +303,6 @@ function loopPress(s: PanelState): void {
     }
   }
 
-  // The Waiting Room. Recording stops on the next press, whether it is a Free
-  // loop being closed by hand or a bar-locked one being cut short.
-  if (s.loopState === 'recording' || s.loopState === 'counting') {
-    looper.closeFree()
-    return
-  }
   looper.arm(LOOP_BARS[s.loopCursor] ?? null)
 }
 
@@ -543,17 +600,20 @@ export const ENCODERS: readonly Encoder[] = [
     place: 'row',
     digit: 6,
     cap: 'black',
+    reach: (s) => enterLoop(s),
     turn: (s, d) => {
       if (s.loopScreen === null) {
-        s.setLoopScreen('sync')
+        enterLoop(s)
         return
       }
       s.moveLoopCursor(d, loopRows(s).length)
     },
     press: (s) => loopPress(s),
-    hold: (s) => (s.loopScreen === null ? s.setLoopScreen('sync') : s.setLoopScreen('save')),
+    hold: (s) => (s.loopScreen === null ? enterLoop(s) : s.setLoopScreen('save')),
     lamp: (s) => s.loopState !== 'empty',
-    list: (s) => ({ rows: loopRows(s), cursor: s.loopCursor }),
+    // No `list`. Loop Mode is a mode, not a view, so the screen renders it from
+    // `loopScreen` — and a second source for the same rows is how the two came
+    // apart in the first place.
     sensitivity: 10,
   },
   {

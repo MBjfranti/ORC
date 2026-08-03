@@ -28,6 +28,9 @@ interface Props {
 /** What the main button does next, given where the loop is. */
 const ACTION: Record<LoopView['state'], string> = {
   empty: 'Record',
+  // Free mode, waiting for you to play — §12.3 starts the clock on the first
+  // note, so until then the button is offering to give up rather than to stop.
+  armed: 'Play to start',
   counting: 'Count in',
   recording: 'Recording',
   playing: 'Overdub',

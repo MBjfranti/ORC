@@ -37,7 +37,9 @@ import {
   columnIndices,
   ENCODERS,
   encoderLegend,
+  isCapturing,
   isPlaceholder,
+  isStoppable,
   loopRows,
   rowIndices,
   SCREEN_AFTER,
@@ -483,11 +485,26 @@ function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
           length={s.loopLength}
           state={s.loopState}
         />
-        <div className="loop-panel">
-          {s.loopState === 'recording' || s.loopState === 'counting' ? (
-            <span className="loop-rec">
-              {s.loopState === 'counting' ? (s.loopCount || BEATS_IN) : 'Rec'}
-            </span>
+        {/*
+          Three panels, not two.
+
+          Counting in — the bar's countdown, alone and large.
+
+          Capturing — `Rec`, which §12.3 says the display shows, *and* the row
+          you press to end it where one exists. Showing `Rec` by itself was the
+          whole of it before, which meant that during an overdub the screen
+          named no way out and there wasn't one.
+
+          Otherwise — the menu, whichever of the three it is.
+        */}
+        <div className="loop-panel" data-capturing={isCapturing(s)}>
+          {s.loopState === 'counting' ? (
+            <span className="loop-rec">{s.loopCount || BEATS_IN}</span>
+          ) : isCapturing(s) ? (
+            <>
+              <span className="loop-rec loop-rec-small">Rec</span>
+              {isStoppable(s) && <ScreenList rows={loopRows(s)} cursor={0} visible={1} />}
+            </>
           ) : (
             <ScreenList rows={loopRows(s)} cursor={s.loopCursor} visible={3} />
           )}

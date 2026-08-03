@@ -22,7 +22,15 @@ import { METERS } from '../core/beats.js'
 import type { Meter } from '../core/beats.js'
 import type { Synth } from './synth.js'
 
-export type LoopState = 'empty' | 'counting' | 'recording' | 'playing' | 'overdubbing' | 'paused'
+export type LoopState =
+  | 'empty'
+  /** Free mode, waiting for the first note to start the clock (§12.3). */
+  | 'armed'
+  | 'counting'
+  | 'recording'
+  | 'playing'
+  | 'overdubbing'
+  | 'paused'
 
 export interface LoopView {
   readonly state: LoopState
@@ -118,16 +126,28 @@ export class Looper {
    * Arm a recording.
    *
    * Bar-locked loops get a one-bar count-in so you have somewhere to breathe.
-   * Free loops start the instant you ask, because there is no grid to line up
-   * with and waiting would just be latency.
+   * Free loops arm and wait for you to play, which is §12.3's own rule and the
+   * only sensible one — there is no grid to line up with, so the first note has
+   * to be the downbeat.
    */
   arm(bars: number | null): void {
     this.reset()
     const length = bars === null ? 0 : this.barSeconds(bars)
     this.loop = emptyLoop(length, bars)
 
+    /*
+     * > "In Free mode, recording starts **as soon as you play the first
+     * > note**." — §12.3
+     *
+     * So a free loop arms and waits. It used to start its clock on the press,
+     * which baked however long you took to reach the keys into the top of the
+     * loop — the loop then came round early by exactly that much, every pass,
+     * and there was no way to see why.
+     */
     if (bars === null) {
-      this.begin('recording')
+      this.state = 'armed'
+      this.passStart = this.now()
+      this.onChange?.()
       return
     }
 
@@ -174,6 +194,12 @@ export class Looper {
 
   /** Stop a free recording and adopt however long it turned out to be. */
   closeFree(): void {
+    // Armed and never played: there is nothing to close, so drop it rather than
+    // committing a loop of pure silence.
+    if (this.state === 'armed') {
+      this.reset()
+      return
+    }
     if (this.state !== 'recording' || !this.loop || this.loop.bars !== null) return
     this.loop = { ...this.loop, lengthSeconds: Math.max(0.25, this.now() - this.passStart) }
     this.commit()
@@ -202,6 +228,21 @@ export class Looper {
   }
 
   /**
+   * `Stop`, as the menu row — "press the Loop Dial on **Stop** to stop recording
+   * in Free Mode" (§12.4) and "to finish overdubbing" (§12.5).
+   *
+   * A bar-locked recording is deliberately not stoppable this way: §12.4 says
+   * "wait for the fixed loop to finish", and the row is not offered for it.
+   */
+  stop(): void {
+    if (this.state === 'armed' || this.state === 'recording') {
+      this.closeFree()
+      return
+    }
+    if (this.state === 'overdubbing') this.stopRecording()
+  }
+
+  /**
    * The one button that means the next sensible thing.
    *
    * empty → arm · recording(free) → close · playing → overdub ·
@@ -213,6 +254,7 @@ export class Looper {
       case 'empty':
         this.arm(bars)
         break
+      case 'armed':
       case 'recording':
         if (this.loop?.bars === null) this.closeFree()
         break
@@ -271,6 +313,9 @@ export class Looper {
   }
 
   captureOn(note: number, velocity: number, stream: Stream): void {
+    // The first note of a free loop *is* the downbeat — it starts the clock and
+    // is then recorded at time zero, not after it.
+    if (this.state === 'armed') this.begin('recording')
     if (this.capturing) this.recorder.noteOn(this.passTime(), note, velocity, stream)
   }
 
