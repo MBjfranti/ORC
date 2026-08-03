@@ -71,6 +71,9 @@ class Synth {
   private metronomeId: number | undefined
   private clickLevel = 0.6
   private drums!: Drums
+  /** Loop playback, one synth per preset a layer actually uses. */
+  private pool = new Map<number, Tone.PolySynth>()
+  private bassPool = new Map<number, Tone.MonoSynth>()
 
   private started = false
   private prepared = false
@@ -433,6 +436,9 @@ class Synth {
       this.bass.triggerRelease(Tone.immediate())
       this.bassNote = undefined
     }
+
+    // The pool is a separate set of voices, so panic has to reach it by name.
+    this.stopPlayback()
   }
 
   /**
@@ -460,8 +466,18 @@ class Synth {
 
   private apply(sound: Sound): void {
     const synth = this.voices.get(sound.engine)
-    if (!synth) return
+    if (synth) this.applyTo(synth, sound)
+  }
 
+  /**
+   * Write a preset onto a synth.
+   *
+   * Split out from `apply` so the playback pool can be configured with exactly
+   * the same numbers as the live voice — a layer that sounded different on
+   * playback than it did while you recorded it would be worse than no per-layer
+   * sound at all.
+   */
+  private applyTo(synth: Tone.PolySynth, sound: Sound): void {
     const envelope = {
       attack: sound.attack,
       decay: decayFor(sound.decay),
@@ -502,9 +518,12 @@ class Synth {
    * constants, so they pass through untouched; see `bass.ts`.
    */
   setBassSound(index: number): void {
-    if (!this.started) return
+    if (this.started) this.applyBassTo(this.bass, index)
+  }
+
+  private applyBassTo(bass: Tone.MonoSynth, index: number): void {
     const sound = bassAt(index)
-    this.bass.set({
+    bass.set({
       oscillator: { type: sound.wave },
       envelope: {
         attack: sound.attack,
@@ -651,6 +670,108 @@ class Synth {
 
   setBassLevel(level: number): void {
     if (this.started) this.bassGain.gain.rampTo(clamp01(level), 0.05)
+  }
+
+  // --- loop playback, per layer ----------------------------------------------
+  //
+  // A pool of synths keyed by preset, so a loop's layers can each speak with
+  // the sound they were played with. The live path above is untouched and keeps
+  // its own voices: it has to solve the strum problem, where a release can
+  // overtake an attack that has not happened yet, and that machinery is only
+  // correct for one synth at a time.
+  //
+  // Playback needs none of it. Every recorded note has a known duration at the
+  // moment it is scheduled, so `triggerAttackRelease` is exact and there is
+  // nothing to withdraw. That is why this is a second path rather than the
+  // ledger made generic.
+
+  /**
+   * The synth for a preset, built on first use.
+   *
+   * Lazily, because the library is fifty deep and a loop touches a handful.
+   * Each is wired into the same filter and effects chain as the live voices —
+   * there is one rack on this instrument, and a loop that bypassed it would
+   * drift away from what you are playing over the top the moment you moved a
+   * dial.
+   */
+  private poolFor(index: number): Tone.PolySynth | undefined {
+    if (!this.started) return undefined
+    const existing = this.pool.get(index)
+    if (existing) return existing
+
+    const sound = soundAt(index)
+    const synth =
+      sound.engine === 'sub'
+        ? new Tone.PolySynth(Tone.Synth)
+        : new Tone.PolySynth(Tone.FMSynth)
+    synth.connect(this.filter)
+    this.pool.set(index, synth)
+    this.applyTo(synth, sound)
+    return synth
+  }
+
+  private bassPoolFor(index: number): Tone.MonoSynth | undefined {
+    if (!this.started) return undefined
+    const existing = this.bassPool.get(index)
+    if (existing) return existing
+    const synth = new Tone.MonoSynth().connect(this.bassGain)
+    this.bassPool.set(index, synth)
+    this.applyBassTo(synth, index)
+    return synth
+  }
+
+  /**
+   * Build a layer's synth **now**, off the audio path.
+   *
+   * Measured: constructing and configuring one `PolySynth` costs 8–12ms on the
+   * main thread. The context's `lookAhead` is 10ms. So building one lazily
+   * inside a scheduled playback callback would spend the entire scheduling
+   * window on construction and hand the notes to the audio clock late — a
+   * hitch, and precisely on the first pass of a new layer, which is the pass
+   * you are listening hardest to.
+   *
+   * Called when a pass *starts capturing*, so the cost lands on a keypress —
+   * where 10ms is invisible — and there is a full pass of headroom before
+   * anything needs to play. Allocating the first voice is a further 0.1ms, and
+   * not worth pre-empting.
+   */
+  warm(sound: number, bassSound: number): void {
+    this.poolFor(sound)
+    this.bassPoolFor(bassSound)
+  }
+
+  /** One recorded note, on the preset its layer was played with. */
+  playNote(index: number, note: MidiNote, velocity: number, at: number, duration: number): void {
+    // A zero-length note is silent on some voices and a click on others, so the
+    // floor is a short note rather than whatever was recorded.
+    this.poolFor(index)?.triggerAttackRelease(
+      midiToFreq(note),
+      Math.max(0.02, duration),
+      at,
+      velocity,
+    )
+  }
+
+  playBassNote(
+    index: number,
+    note: MidiNote,
+    velocity: number,
+    at: number,
+    duration: number,
+  ): void {
+    this.bassPoolFor(index)?.triggerAttackRelease(
+      midiToFreq(note),
+      Math.max(0.02, duration),
+      at,
+      velocity,
+    )
+  }
+
+  /** Silence the loop without touching what the hands are holding. */
+  stopPlayback(): void {
+    if (!this.started) return
+    for (const synth of this.pool.values()) synth.releaseAll()
+    for (const synth of this.bassPool.values()) synth.triggerRelease(Tone.immediate())
   }
 }
 

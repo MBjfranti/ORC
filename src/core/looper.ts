@@ -20,9 +20,30 @@ export interface LoopEvent {
   readonly stream: Stream
 }
 
-/** One recording pass. Layers stack; undo removes the last. */
+/**
+ * One recording pass. Layers stack; undo removes the last.
+ *
+ * A layer remembers **which sounds it was played with**, and that is a
+ * deliberate departure from the hardware. The Orchid is a note looper —
+ * "it records your performance and replays it through the current sound, which
+ * is why changing the sound after recording changes the playback"
+ * (research/08) — so on the instrument every layer speaks with whatever preset
+ * is loaded now, and a loop can only ever be one timbre.
+ *
+ * That makes the manual's own overdub tip (§12.7, "record one note of the chord
+ * at a time") a way of building voicings but not arrangements. Carrying the
+ * preset per layer is what lets you put a bass on one pass and a Rhodes on the
+ * next, which is the thing a browser can do and the hardware cannot.
+ *
+ * The cost is real and worth stating: sweeping the Sound dial no longer
+ * re-voices a finished loop.
+ */
 export interface Layer {
   readonly events: readonly LoopEvent[]
+  /** Index into the fifty-strong treble library. */
+  readonly sound: number
+  /** Index into the twelve bass presets, for this layer's bass stream. */
+  readonly bassSound: number
 }
 
 export interface Loop {
@@ -54,9 +75,14 @@ export function barsToSeconds(bars: number, bpm: number, beatsPerBar = 4): numbe
   return (60 / bpm) * beatsPerBar * bars
 }
 
-export const withLayer = (loop: Loop, events: readonly LoopEvent[]): Loop => ({
+export const withLayer = (
+  loop: Loop,
+  events: readonly LoopEvent[],
+  sound: number,
+  bassSound: number,
+): Loop => ({
   ...loop,
-  layers: [...loop.layers, { events }],
+  layers: [...loop.layers, { events, sound, bassSound }],
 })
 
 export const undoLayer = (loop: Loop): Loop => ({ ...loop, layers: loop.layers.slice(0, -1) })

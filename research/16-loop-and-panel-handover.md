@@ -209,16 +209,49 @@ This is the manual's own tip (§12.7): "use Loop Mode in Overdub to record one
 note of the chord at a time… letting you experiment with complex chord
 voicings".
 
-**Sound is not per-layer, and on the hardware cannot be.** It is a note looper:
-"it records your performance and replays it through the current sound, which is
-why changing the sound after recording changes the playback" (research/08). All
-layers therefore speak with whichever preset is loaded now.
+**Sound is now per-layer too — a deliberate departure from the hardware.** The
+Orchid is a note looper: "it records your performance and replays it through the
+current sound, which is why changing the sound after recording changes the
+playback" (research/08), so on the instrument a loop can only ever be one
+timbre. `Layer` carries `sound` and `bassSound`, stamped when the pass *starts
+capturing* rather than at commit, so changing preset halfway through a take does
+not silently retag what you already played.
 
-Per-layer timbre would be a real webapp improvement (research/11 territory) but
-it is an architectural change, not a flag: presets within one engine share a
-single `PolySynth`, so two `sub` presets cannot sound at once. It needs a synth
-pool keyed by preset, and it is a deliberate departure from the hardware. Not
-done; flagged.
+The cost is real: sweeping the Sound dial no longer re-voices a finished loop.
+Verified both ways — layers came back `[0, 12]`, and moving the live preset from
+6 to 41 left the loop's spectral centroid at 28.8 → 28.0.
+
+### The pool, and the latency trap in it
+
+Playback goes to a **pool of synths keyed by preset** (`Synth.poolFor`), wired
+into the same filter and FX chain as the live voices. The live path is
+untouched: it has to solve the strum problem, where a release can overtake an
+attack that has not happened yet, and that ledger is only correct for one synth
+at a time. Playback needs none of it — every recorded note's duration is known
+when it is scheduled, so it is one `triggerAttackRelease`.
+
+That makes steady-state playback **cheaper than before**: the old path booked
+two cancellable `setTimeout`s per note per pass through `noteOn`/`noteOff`.
+
+**The trap:** constructing a `PolySynth` measured **8–12ms on the main thread**,
+against a `lookAhead` of **10ms**. Built lazily inside a scheduled playback
+callback it would spend the whole scheduling window on construction and hand the
+notes over late — a hitch, on the first pass of a new layer, which is the pass
+you are listening hardest to.
+
+So it is built twice over, both off the audio path:
+
+- `Looper.stampSounds` warms at the moment capture starts — a full pass of
+  headroom before anything plays.
+- An idle effect in `App` warms whatever preset you have *settled* on, on a
+  400ms delay so scrolling fifty sounds builds nothing.
+
+Measured: record press **1.4ms** pre-warmed, 22ms cold, 85ms on the very first
+(module warm-up). Not pre-warming at all would have put 8–12ms of it inside the
+audio callback instead.
+
+`pause()` calls `stopPlayback()` rather than `allNotesOff()`, so pausing a loop
+does not cut a chord you are holding.
 
 ## Still not built
 

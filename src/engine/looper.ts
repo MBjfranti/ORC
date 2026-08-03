@@ -17,7 +17,7 @@ import {
   undoLayer,
   withLayer,
 } from '../core/looper.js'
-import type { Grid, Loop, LoopEvent, Stream } from '../core/looper.js'
+import type { Grid, Layer, Loop, LoopEvent, Stream } from '../core/looper.js'
 import { METERS } from '../core/beats.js'
 import type { Meter } from '../core/beats.js'
 import { atTick, barTicks, beatTicks, nextBar, secondsToTicks, ticksAt } from './clock.js'
@@ -68,6 +68,16 @@ export interface LoopConfig {
    * feel like it is being played to something rather than into silence.
    */
   readonly onRecord?: () => void
+  /**
+   * Which presets are loaded right now.
+   *
+   * Read at the moment a pass *starts capturing* and stamped onto the layer, so
+   * every layer replays with the sound it was played with. Kept as config the
+   * panel pushes rather than as a lookup the looper does, because `engine/`
+   * does not get to import the store.
+   */
+  readonly sound?: number
+  readonly bassSound?: number
 }
 
 export class Looper {
@@ -87,6 +97,11 @@ export class Looper {
   private onChange: (() => void) | undefined
   private countIn: ((bars: number) => void) | undefined
   private onRecord: (() => void) | undefined
+  /** The presets currently loaded, and the pair the open pass will be stamped with. */
+  private sound = 0
+  private bassSound = 3
+  private capturedSound = 0
+  private capturedBass = 3
 
   constructor(private synth: Synth) {}
 
@@ -97,6 +112,26 @@ export class Looper {
     if (opts.onChange !== undefined) this.onChange = opts.onChange
     if (opts.countIn !== undefined) this.countIn = opts.countIn
     if (opts.onRecord !== undefined) this.onRecord = opts.onRecord
+    if (opts.sound !== undefined) this.sound = opts.sound
+    if (opts.bassSound !== undefined) this.bassSound = opts.bassSound
+  }
+
+  /**
+   * Freeze the presets this pass belongs to.
+   *
+   * At the *start* of capture rather than at commit, so changing sound halfway
+   * through a take does not silently retag everything you had already played.
+   */
+  private stampSounds(): void {
+    this.capturedSound = this.sound
+    this.capturedBass = this.bassSound
+    /*
+     * Build this pass's playback synths here, on the keypress, rather than
+     * letting the first pass build them inside a scheduled callback — that
+     * costs 8-12ms against a 10ms lookahead and arrives as a hitch on the one
+     * pass you are listening hardest to. See `Synth.warm`.
+     */
+    this.synth.warm(this.capturedSound, this.capturedBass)
   }
 
   /** One bar, in seconds, at the current tempo and time signature. */
@@ -150,6 +185,8 @@ export class Looper {
      * loop — the loop then came round early by exactly that much, every pass,
      * and there was no way to see why.
      */
+    this.stampSounds()
+
     if (bars === null) {
       this.state = 'armed'
       this.passStart = this.now()
@@ -249,7 +286,10 @@ export class Looper {
    * knew — a ring still sweeping round a loop that has been cleared.
    */
   overdub(): void {
-    if (this.loop && this.state === 'playing') this.state = 'overdubbing'
+    if (this.loop && this.state === 'playing') {
+      this.stampSounds()
+      this.state = 'overdubbing'
+    }
     this.onChange?.()
   }
 
@@ -307,7 +347,8 @@ export class Looper {
   pause(): void {
     if (this.state !== 'playing') return
     this.unschedule()
-    this.synth.allNotesOff()
+    // Only the loop's own voices — pausing must not cut a chord you are holding.
+    this.synth.stopPlayback()
     this.state = 'paused'
     this.onChange?.()
   }
@@ -442,25 +483,37 @@ export class Looper {
   private play(at: number): void {
     if (!this.loop) return
     for (const layer of this.loop.layers) {
-      for (const e of layer.events) this.playEvent(e, at + e.time)
+      for (const e of layer.events) this.playEvent(e, at + e.time, layer)
     }
   }
 
-  private playEvent(e: LoopEvent, at: number): void {
+  /**
+   * Each layer on its own preset.
+   *
+   * Playback goes to the synth pool rather than through `noteOn`/`noteOff`,
+   * because a recorded note's duration is known at the moment it is scheduled —
+   * so it can be triggered as one event, and none of the live path's machinery
+   * for withdrawing an attack that has not happened yet applies. It also stops
+   * the loop competing with your hands for the same voices.
+   */
+  private playEvent(e: LoopEvent, at: number, layer: Layer): void {
     if (e.stream === 'bass') {
-      this.synth.bassOn(e.note, e.velocity, at)
-      this.synth.bassOff(at + e.duration)
+      this.synth.playBassNote(layer.bassSound, e.note, e.velocity, at, e.duration)
       return
     }
-    this.synth.noteOn(e.note, e.velocity, at)
-    this.synth.noteOff(e.note, at + e.duration)
+    this.synth.playNote(layer.sound, e.note, e.velocity, at, e.duration)
   }
 
   private commit(): void {
     if (!this.loop) return
     const events = this.recorder.finish(this.loop.lengthSeconds)
     if (events.length === 0) return
-    this.loop = withLayer(this.loop, quantize(events, this.grid, this.bpm, this.loop.lengthSeconds))
+    this.loop = withLayer(
+      this.loop,
+      quantize(events, this.grid, this.bpm, this.loop.lengthSeconds),
+      this.capturedSound,
+      this.capturedBass,
+    )
   }
 }
 

@@ -133,6 +133,23 @@ export default function App() {
   useEffect(() => void synth.setBassLevel(bassLevel), [synth, bassLevel])
   useEffect(() => void synth.setBassSound(bassIndex), [synth, bassIndex])
   useEffect(() => void synth.setBpm(bpm), [synth, bpm])
+
+  /*
+   * Build the playback synth for whichever preset you have settled on.
+   *
+   * Loop layers replay on their own preset, and constructing one costs 8-12ms.
+   * `Looper` already warms at the moment capture starts, which keeps that cost
+   * off the audio path — but it still lands on the record press, measured at
+   * 23ms for a preset never used before. Doing it here as well means the press
+   * is ~1ms, because by then it exists.
+   *
+   * On a delay, so scrolling the fifty-strong list builds nothing: only a sound
+   * you have stopped on for a moment is one you might record with.
+   */
+  useEffect(() => {
+    const id = window.setTimeout(() => synth.warm(soundIndex, bassIndex), 400)
+    return () => window.clearTimeout(id)
+  }, [synth, soundIndex, bassIndex])
   useEffect(() => void synth.setBeatLevel(beatLevel), [synth, beatLevel])
   useEffect(() => void synth.setClickLevel(clickLevel), [synth, clickLevel])
   useEffect(() => void synth.setDrumReverb(drumReverb), [synth, drumReverb])
@@ -196,6 +213,11 @@ export default function App() {
       bpm,
       grid: loopGrid,
       meter,
+      // Pushed in rather than looked up, so the looper never reaches into the
+      // store. Whichever pair is loaded when a pass starts is stamped onto that
+      // layer and is what it replays with.
+      sound: soundIndex,
+      bassSound: bassIndex,
       /*
        * The handoff v3.90 describes: the click counts the bar in, and if a beat
        * is selected it takes over the moment recording starts. Only when one is
@@ -218,7 +240,7 @@ export default function App() {
           .syncLoop(view.state, view.layers, view.bars, view.lengthSeconds, view.countBeat)
       },
     })
-  }, [looper, bpm, loopGrid, meter])
+  }, [looper, bpm, loopGrid, meter, soundIndex, bassIndex])
 
   /**
    * Mirror the loop's position on rAF — but **only while a loop is running**,
