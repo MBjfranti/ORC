@@ -24,6 +24,7 @@
  */
 
 import { BEATS, beatLabel, clockRow, METERS } from '../core/beats.js'
+import { OPTIONS, optionById } from '../core/options.js'
 import { barsLabel, LOOP_BARS } from '../core/looper.js'
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
 import { looperOrNull } from '../engine/looper.js'
@@ -336,6 +337,27 @@ const level99 = (n: number) => String(Math.round(n * 99)).padStart(2, '0')
  * past the time signatures** to access Beats."
  */
 export const BEAT_LIST = 101
+
+/** The Options menu, addressed the same way — past the end of the encoder row. */
+export const OPTIONS_LIST = 102
+
+/**
+ * The Options screen: the flat root, or one setting's values.
+ *
+ * Root rows carry no value column. `Extension Addition` is eighteen characters
+ * and the display is 128 pixels wide, so there is no room for one — which is
+ * also all PDF p20 and p23 show, labels alone.
+ */
+export function optionRows(s: PanelState): { rows: Row[]; cursor: number } {
+  if (s.optionsPage !== null) {
+    const row = optionById(s.optionsPage)
+    return {
+      rows: (row.values ?? []).map((v) => ({ label: v })),
+      cursor: s.optionsCursor,
+    }
+  }
+  return { rows: OPTIONS.map((o) => ({ label: o.label })), cursor: s.optionsCursor }
+}
 
 /**
  * Signatures, then beats. No value column, deliberately.
@@ -669,7 +691,29 @@ export const ENCODERS: readonly Encoder[] = [
       s.screenList === BEAT_LIST ? undefined : { value: String(s.bpm), label: 'BPM' },
     sensitivity: 6,
   },
-  { id: 'options', label: 'Options', shown: true, place: 'row', digit: 8, cap: 'black' },
+  {
+    /*
+     * Options. "To access these options, use the Options Dial" (§14) — and
+     * research/13 §B.2 lists opening as the dial's only job, so reaching for it
+     * is entering it, the way it is for Loop.
+     *
+     * The menu is flat (see `core/options.ts`), and a setting's values open on a
+     * second screen because a label and a value will not share a 128px row.
+     *
+     *   turn  → the rows, or the values once you are inside one
+     *   press → open a setting, choose a value, or leave on `Exit`
+     */
+    id: 'options',
+    label: 'Options',
+    shown: true,
+    place: 'row',
+    digit: 8,
+    cap: 'black',
+    reach: (s) => s.setScreenList(OPTIONS_LIST),
+    turn: (s, d) => s.moveOptionsCursor(d),
+    press: (s) => s.pressOption(),
+    sensitivity: 8,
+  },
 
   // --- between the hands ---------------------------------------------------
   //
@@ -756,13 +800,15 @@ export function screenRows(
   if (open === null) return null
   if (open === BASS_MODE_LIST) return menuList(s)
   if (open === BEAT_LIST) return { rows: beatRows(), cursor: clockRow(s.meter, s.beatIndex) }
+  if (open === OPTIONS_LIST) return optionRows(s)
   return ENCODERS[open]?.list?.(s) ?? null
 }
 
 /** What the screen is titled, for whatever is open. */
-export function screenLabel(open: number): string {
+export function screenLabel(open: number, s: PanelState): string {
   if (open === BASS_MODE_LIST) return 'Bass plays'
   if (open === BEAT_LIST) return 'Beats'
+  if (open === OPTIONS_LIST) return s.optionsPage ? optionById(s.optionsPage).label : 'Options'
   return ENCODERS[open]?.label ?? 'Display'
 }
 

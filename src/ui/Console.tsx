@@ -525,7 +525,7 @@ function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
   }
 
   return (
-    <div className="screen screen-stat" role="status" aria-label={screenLabel(s.screenList!)}>
+    <div className="screen screen-stat" role="status" aria-label={screenLabel(s.screenList!, s)}>
       <ScreenList rows={view.rows} cursor={view.cursor} />
     </div>
   )

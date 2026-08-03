@@ -71,6 +71,7 @@ class Synth {
   private metronome!: Tone.Synth
   private metronomeId: number | undefined
   private clickLevel = 0.6
+  private clickSound: 'beep' | 'hihat' = 'beep'
   private drums!: Drums
   /** Loop playback, one synth per preset a layer actually uses. */
   private pool = new Map<number, Tone.PolySynth>()
@@ -538,7 +539,26 @@ class Synth {
   click(at: number, accent = false): void {
     if (!this.started) return
     const velocity = (accent ? 0.9 : 0.55) * this.clickLevel
+    /*
+     * `Options → Metronome Click` offers `Beep` or `Hi Hat` (§14.10, values
+     * from research/02 — the section itself names no sounds, and research/13
+     * §A.10 says not to invent more).
+     *
+     * The hi-hat is the drum kit's own closed hat rather than a second
+     * oscillator pretending to be one, so the two settings really are two
+     * sounds. It bypasses the drum bus, because the click is not the beat: it
+     * is never captured and Beat Volume must not silence it.
+     */
+    if (this.clickSound === 'hihat') {
+      this.drums.hit('hat', at, velocity)
+      return
+    }
     this.metronome.triggerAttackRelease(accent ? 1600 : 1067, 0.03, at, velocity)
+  }
+
+  /** `Beep` or `Hi Hat` — §14.10. */
+  setClickSound(sound: 'beep' | 'hihat'): void {
+    this.clickSound = sound
   }
 
   /**

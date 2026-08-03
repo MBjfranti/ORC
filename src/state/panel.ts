@@ -11,6 +11,8 @@ import { create } from 'zustand'
 
 import { buildChord } from '../core/chord.js'
 import { clockAt, clockRow, CLOCK_ROWS } from '../core/beats.js'
+import { OPTIONS } from '../core/options.js'
+import type { OptionId } from '../core/options.js'
 import { GRIDS, LOOP_BARS } from '../core/looper.js'
 import { clampVoicing } from '../core/voicing.js'
 import type { Grid } from '../core/looper.js'
@@ -169,7 +171,6 @@ export interface PanelState {
   // --- looper ---
   /** Length of the next recording. `null` records until you stop it. */
   loopBars: number | null
-  loopGrid: Grid
   /**
    * Which of Loop Mode's three screens is up (research/13 §M7–M9).
    *
@@ -246,6 +247,25 @@ export interface PanelState {
   } | null
 
 
+  /**
+   * Where the Options menu is: its root, or one setting's value list.
+   *
+   * `null` at the root — "flat" means no grouping, but a label and its value
+   * cannot share a 128px row, so choosing a value happens on a second screen.
+   */
+  optionsPage: OptionId | null
+  optionsCursor: number
+  /** Which value each setting is on, by row. Only the built ones do anything. */
+  optionValue: Readonly<Record<string, number>>
+  /**
+   * Battery, read from the browser rather than imitated.
+   *
+   * §14.1 shows the instrument's charge; a laptop has one too, so this is one
+   * of the few hardware readouts that can be answered honestly. `null` where
+   * the platform declines to say.
+   */
+  battery: number | null
+
   /** Held chords keep sounding after the hands leave. */
   latched: boolean
 
@@ -314,15 +334,39 @@ export interface PanelState {
   setLoopScreen: (screen: PanelState['loopScreen']) => void
   moveLoopCursor: (delta: number, rows: number) => void
   syncLoop: (state: LoopState, layers: number, bars: number | null, length: number, countBeat: number) => void
-  setLoopGrid: (grid: Grid) => void
   toggleLatch: () => void
   setDialFocus: (index: number) => void
+  moveOptionsCursor: (delta: number) => void
+  /** The press: descend into a setting, choose a value, or leave. */
+  pressOption: () => void
+  setOptionsPage: (page: OptionId | null) => void
+  setBattery: (level: number | null) => void
+  setOptionValue: (id: OptionId, value: number) => void
   setScreenList: (index: number | null) => void
   showGlance: (value: string, label: string, level?: number, secondary?: boolean) => void
   clearGlance: () => void
 }
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
+
+/** The app's own version, standing in for §14.13's firmware version. */
+export const APP_VERSION = '0.1.0'
+
+/** How many values a setting's page lists. */
+const optionRowCount = (id: OptionId): number =>
+  OPTIONS.find((o) => o.id === id)?.values?.length ?? 1
+
+/**
+ * What an `info` or unbuilt row reports when pressed.
+ *
+ * `--` is the same mark the FX rack puts on an effect it does not have, so the
+ * panel says "not built" in one voice rather than two.
+ */
+function optionReadout(s: PanelState, id: OptionId): string {
+  if (id === 'battery') return s.battery === null ? '--' : String(Math.round(s.battery * 99))
+  if (id === 'version') return APP_VERSION
+  return '--'
+}
 
 /**
  * Where each rack slot's amount actually lives.
@@ -442,7 +486,6 @@ export const usePanel = create<PanelState>((set) => ({
   bassMode: 'chords',
 
   loopBars: 4,
-  loopGrid: 'off',
   loopScreen: null,
   loopCursor: 3, // 4 Bars, the length PDF p18 shows selected
   loopState: 'empty',
@@ -451,6 +494,24 @@ export const usePanel = create<PanelState>((set) => ({
   loopCount: 0,
 
   dialFocus: 0,
+  optionsPage: null,
+  optionsCursor: 1, // `Battery`, the first row that is not `Exit`
+  optionValue: {
+    // Defaults are the manual's, where it gives one, and research/13 §A's
+    // inference where it does not — each is argued at its row.
+    view: 1, // `Chord`
+    audioOutput: 0, // `Auto`
+    midiChannels: 0,
+    playStyle: 2, // `Free` — the closest to what the keybed actually does
+    extensionAddition: 0, // `Add Note`
+    singleNote: 1, // `Full Octave Keyboard`
+    secretChords: 0, // `Off`
+    quantization: 0, // `None`, and it is listed first
+    metronomeClick: 0, // `Beep`
+    velocitySense: 0, // `ON`
+    autoPowerOff: 2, // `Never` — a browser tab does not power off
+  },
+  battery: null,
   screenList: null,
   glance: null,
   latched: false,
@@ -690,10 +751,66 @@ export const usePanel = create<PanelState>((set) => ({
         clampIndex(LOOP_BARS.length, LOOP_BARS.indexOf(s.loopBars), delta)
       ] as number | null,
     })),
-  setLoopGrid: (loopGrid) => set({ loopGrid }),
   setBassLevel: (n) => set({ bassLevel: clamp01(n) }),
   toggleLatch: () => set((s) => ({ latched: !s.latched })),
   setDialFocus: (dialFocus) => set({ dialFocus }),
+
+  // --- Options ---------------------------------------------------------------
+
+  moveOptionsCursor: (delta) =>
+    set((s) => {
+      const rows = s.optionsPage === null ? OPTIONS.length : optionRowCount(s.optionsPage)
+      return { optionsCursor: Math.max(0, Math.min(rows - 1, s.optionsCursor + delta)) }
+    }),
+
+  setOptionsPage: (optionsPage) =>
+    set((s) => ({
+      optionsPage,
+      // Entering a setting lands on the value it is already on, which is the
+      // only useful place to start; leaving lands back on the row you came from.
+      optionsCursor:
+        optionsPage === null
+          ? OPTIONS.findIndex((o) => o.id === s.optionsPage)
+          : (s.optionValue[optionsPage] ?? 0),
+    })),
+
+  /**
+   * The press, at whichever of the menu's two levels you are on.
+   *
+   * At the root: `Exit` closes, a setting opens its values, and anything that
+   * only reports — `Battery`, `Version` — throws its value up as a glance
+   * rather than pretending to be adjustable. An unbuilt row raises `--` over
+   * its own name, which says "documented, present, does nothing" in the one
+   * place you are looking.
+   *
+   * In a value list: choose, and come back.
+   */
+  pressOption: () => {
+    const s = usePanel.getState()
+    if (s.optionsPage !== null) {
+      set({ optionValue: { ...s.optionValue, [s.optionsPage]: s.optionsCursor } })
+      usePanel.getState().setOptionsPage(null)
+      return
+    }
+    const row = OPTIONS[s.optionsCursor]
+    if (!row) return
+    if (row.id === 'exit') {
+      set({ screenList: null, optionsPage: null })
+      return
+    }
+    if (row.kind === 'enum' && row.built) {
+      usePanel.getState().setOptionsPage(row.id)
+      return
+    }
+    // Everything else reports rather than changes.
+    const value = optionReadout(s, row.id)
+    s.showGlance(value, row.label)
+  },
+
+  setBattery: (battery) => set({ battery }),
+
+  setOptionValue: (id, value) =>
+    set((s) => ({ optionValue: { ...s.optionValue, [id]: value } })),
   /*
    * Closing the display drops the FX rack back to browsing.
    *

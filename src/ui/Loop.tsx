@@ -41,8 +41,15 @@ const ACTION: Record<LoopView['state'], string> = {
 export const Loop = memo(function Loop({ view, onAdvance, onUndo, onClear, onPause }: Props) {
   const loopBars = usePanel((s) => s.loopBars)
   const cycleLoopBars = usePanel((s) => s.cycleLoopBars)
-  const grid = usePanel((s) => s.loopGrid)
-  const setGrid = usePanel((s) => s.setLoopGrid)
+  /*
+   * Quantization lives in the Options menu and nowhere else — §14.9 puts it
+   * there, and a second copy on this panel would be a second source of truth
+   * for one setting. Read through the same row the menu writes.
+   */
+  const quantIndex = usePanel((s) => s.optionValue.quantization ?? 0)
+  const setOptionValue = usePanel((s) => s.setOptionValue)
+  const grid = GRIDS[quantIndex] ?? 'off'
+  const setGrid = (g: Grid) => setOptionValue('quantization', Math.max(0, GRIDS.indexOf(g)))
 
   const live = view.state !== 'empty'
   const armed = view.state === 'recording' || view.state === 'overdubbing'

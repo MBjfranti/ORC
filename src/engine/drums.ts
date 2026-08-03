@@ -265,6 +265,18 @@ export class Drums {
     this.scheduleId = undefined
   }
 
+  /**
+   * Strike one voice directly, outside any pattern.
+   *
+   * The metronome borrows the closed hat for its `Hi Hat` setting, which is why
+   * this exists — and it deliberately reaches past the drum bus, because the
+   * click is not part of the beat and Beat Volume must not be able to silence
+   * it.
+   */
+  hit(voice: DrumVoice, time: number, velocity: number): void {
+    this.pieces.get(voice)?.trigger(time, velocity)
+  }
+
   /** Beat Volume — the BPM dial's press-and-turn (§11.4). */
   setLevel(level: number): void {
     this.bus.gain.rampTo(clamp01(level), 0.05)

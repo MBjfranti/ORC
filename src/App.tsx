@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { beatAt, meterAt } from './core/beats.js'
+import { GRIDS } from './core/looper.js'
 import { Instrument } from './engine/instrument.js'
 import type { Sounding } from './engine/instrument.js'
 import { getLooper } from './engine/looper.js'
@@ -121,8 +122,17 @@ export default function App() {
   const clickLevel = usePanel((s) => s.clickLevel)
   const drumReverb = usePanel((s) => s.drumReverb)
   const drumSat = usePanel((s) => s.drumSat)
-  const loopGrid = usePanel((s) => s.loopGrid)
+  const optionValue = usePanel((s) => s.optionValue)
   const meter = meterAt(meterIndex)
+  /*
+   * The two Options settings that drive something.
+   *
+   * Quantization *is* the looper's grid — one setting, not a copy of one, so
+   * `GRIDS` is indexed straight from the menu row rather than mirrored into a
+   * second field that could disagree with it.
+   */
+  const loopGrid = GRIDS[optionValue.quantization ?? 0] ?? 'off'
+  const clickSound = (optionValue.metronomeClick ?? 0) === 1 ? 'hihat' : 'beep'
 
   useEffect(() => void synth.setSound(soundIndex), [synth, soundIndex])
   useEffect(() => void synth.setCutoff(cutoff), [synth, cutoff])
@@ -133,6 +143,26 @@ export default function App() {
   useEffect(() => void synth.setBassLevel(bassLevel), [synth, bassLevel])
   useEffect(() => void synth.setBassSound(bassIndex), [synth, bassIndex])
   useEffect(() => void synth.setBpm(bpm), [synth, bpm])
+  useEffect(() => void synth.setClickSound(clickSound), [synth, clickSound])
+
+  /*
+   * §14.1 shows the instrument's charge. A browser has a battery too, so this
+   * is one of the few hardware readouts that can be answered honestly rather
+   * than imitated — and `null` where the platform declines to say, which is
+   * most of them now that the API is permission-gated.
+   */
+  useEffect(() => {
+    const nav = navigator as Navigator & { getBattery?: () => Promise<{ level: number }> }
+    if (!nav.getBattery) return
+    let live = true
+    void nav
+      .getBattery()
+      .then((b) => live && usePanel.getState().setBattery(b.level))
+      .catch(() => usePanel.getState().setBattery(null))
+    return () => {
+      live = false
+    }
+  }, [])
 
   /*
    * Build the playback synth for whichever preset you have settled on.

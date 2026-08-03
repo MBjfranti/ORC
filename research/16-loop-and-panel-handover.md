@@ -298,12 +298,48 @@ down. Everything else lands within about 2.5dB.
 Those are the fields that move loudness, and a stale trim is worse than none
 because it looks deliberate.
 
+## Options (encoder 8) — built, and flat
+
+**The menu is flat, and that is a resolved conflict.** research/02 transcribes a
+four-branch tree (System / Instrument / Bass / Audio and MIDI) from firmware
+**v3.90**. Manual v4.1's §14 is a flat run of numbered settings, its §16.2 FAQ
+cites flat paths, and **both illustrations show an unindented list** — PDF p20
+captures the head (`Exit`, `Battery`, `View`, `Audio Output`, `MIDI Channels`)
+and p23 the tail. research/13 §A.1 calls it: implement flat, v3.90 superseded.
+Same precedent as the FX order — the photograph beats the prose.
+
+PDF p23 also disagrees about *order*, putting `Version` straight after
+`Extension Addition`; it is missing §14.7–§14.12 entirely and reads as a stale
+capture, so the §14 numbering wins.
+
+"Flat" means no *grouping*. It cannot mean values inline: `Extension Addition`
+is eighteen characters against a 128px display, so a setting's values open on a
+second screen — which is also all p20 and p23 show, labels with nothing beside
+them.
+
+Four rows do something. The rest hold their documented place and say `--`, the
+same mark the FX rack puts on an effect it does not have:
+
+| Row | State |
+|---|---|
+| `Quantization` | **built** — it *is* the looper's grid, read through one field rather than mirrored |
+| `Metronome Click` | **built** — `Beep` or the kit's own closed hat. Measured as genuinely two sounds: centroid 205 against 418 |
+| `Battery` | **built** — read from the browser. A laptop has one, so this is answerable rather than imitated |
+| `Version` | **built** — the app's version standing in for §14.13's firmware version |
+| `View` | inert — the five other view modes are the open item below |
+| `Play Style`, `Extension Addition`, `Single Note Mode`, `Secret Chords` | inert — real behavioural settings, none built |
+| `Velocity Sense` | inert **and will stay so** — a computer keyboard sends no velocity. Nothing to sense until MIDI input exists |
+| `Audio Output`, `Auto Power Off`, `Upgrade firmware`, `MIDI Channels` | hardware — speakers vs a headphone jack, a battery timeout, firmware. A tab has none of them |
+
+Quantization previously existed twice: `loopGrid` in the store *and* the Options
+row. Removed — the menu row is the only copy.
+
 ## Still not built
 
 | Thing | Notes |
 |---|---|
 | Loop's 10 save slots | research/08 calls this "the clearest gap for our webapp" — a browser has localStorage and unlimited slots |
-| Options (encoder 8) | full tree transcribed in research/02 |
+| The Options settings marked inert above | Play Style is the biggest: it changes how pads and keys interact |
 | Phaser, Flanger, Drive, Tremolo, Ensemble | rows exist showing `--`; Tone has three of them |
 | Chord Voicing press → Split ↔ Octave | needs split-mode state |
 | Bass Voicing | placed, does nothing; needs its own voicing state |
