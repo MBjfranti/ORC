@@ -20,6 +20,7 @@ import {
 import type { Grid, Loop, LoopEvent, Stream } from '../core/looper.js'
 import { METERS } from '../core/beats.js'
 import type { Meter } from '../core/beats.js'
+import { atTick, barTicks, beatTicks, nextBar, secondsToTicks, ticksAt } from './clock.js'
 import type { Synth } from './synth.js'
 
 export type LoopState =
@@ -110,7 +111,12 @@ export class Looper {
       state: this.state,
       bars: this.loop?.bars ?? null,
       layers: this.loop?.layers.length ?? 0,
-      position: this.state === 'empty' ? 0 : Math.max(0, Math.min(1, elapsed)),
+      // Nothing to sweep through until a pass is actually running. Counting in
+      // and waiting for the first note both sat at a stale fraction otherwise.
+      position:
+        this.state === 'empty' || this.state === 'counting' || this.state === 'armed'
+          ? 0
+          : Math.max(0, Math.min(1, elapsed)),
       lengthSeconds: length,
       countBeat: this.state === 'counting' ? this.countBeat : 0,
     }
@@ -151,6 +157,22 @@ export class Looper {
       return
     }
 
+    /*
+     * **The count-in begins on the next bar line, not on the press.**
+     *
+     * This is what stops a bar-locked loop coming out half a bar against the
+     * beat. Started from `now()`, the loop's downbeat was wherever your finger
+     * landed, so its bar one and the drum pattern's bar one were unrelated —
+     * every subsequent bar inherited the offset, and the ring's twelve o'clock
+     * marked a boundary that was not a musical one.
+     *
+     * Anchored to transport zero, the same grid the beat and the click read, so
+     * the loop's twelve o'clock *is* the downbeat. The wait is at most one extra
+     * bar before the count-in, which is what any clocked recorder does.
+     */
+    const startTicks = nextBar(this.meter)
+    const bar = barTicks(this.meter)
+
     this.state = 'counting'
     this.passStart = this.now()
     // Assigned directly rather than through `begin`, because a count-in has no
@@ -168,27 +190,39 @@ export class Looper {
      * they are audio, so they belong on the audio clock, and a click that
      * arrives when the browser gets round to it is worse than no click.
      */
+    /*
+     * One scheduled event per beat, carrying both the click and the countdown.
+     *
+     * The click *and* the display now come from the same callback, and the
+     * click uses the `time` the transport hands in. That time is on the audio
+     * clock, which is the one `triggerAttackRelease` reads — the previous
+     * version passed it a transport time instead, two clocks that only agree
+     * while the tempo has never moved.
+     *
+     * The countdown itself is **MANUAL SILENT**: the hardware counts you in
+     * audibly and says nothing about showing it, but a bar of silence with
+     * nothing moving reads as a hang, and knowing there are two beats left is
+     * the difference between coming in and missing it.
+     */
     const beats = this.meter.beats
-    const beat = this.barSeconds() / beats
-    const start = this.now()
+    const perBeat = beatTicks(this.meter)
     for (let i = 0; i < beats; i++) {
-      this.synth.click(start + i * beat, i === 0)
-      /*
-       * Count it down on the screen as well as out loud. **MANUAL SILENT** —
-       * the hardware's count-in is audible and the display is not described, so
-       * this is ours. A bar of silence with nothing moving reads as a hang, and
-       * knowing there are two beats left is the difference between coming in
-       * and missing it.
-       */
-      Tone.getTransport().scheduleOnce(() => {
-        this.countBeat = beats - i
-        this.onChange?.()
-      }, start + i * beat)
+      Tone.getTransport().scheduleOnce(
+        (time) => {
+          this.synth.click(time, i === 0)
+          this.countBeat = beats - i
+          this.onChange?.()
+        },
+        atTick(startTicks + i * perBeat),
+      )
     }
 
+    // Recording begins *on* the bar line, and `begin` is told the audio time
+    // the transport fired at — reading the clock inside the callback would put
+    // `passStart` a scheduling lookahead late and hand that error to every pass.
     this.countInId = Tone.getTransport().scheduleOnce(
-      () => this.begin('recording'),
-      start + this.barSeconds(),
+      (time) => this.begin('recording', time),
+      atTick(startTicks + bar),
     )
   }
 
@@ -325,8 +359,16 @@ export class Looper {
 
   // --- internals -----------------------------------------------------------
 
+  /**
+   * The audio clock, not `Transport.seconds`.
+   *
+   * Everything this is used for is a *duration* — how far into the pass we are,
+   * how long a free recording ran — and durations belong on the clock the notes
+   * are on. `Transport.seconds` drifts from musical position the moment the
+   * tempo changes; see `clock.ts`.
+   */
   private now(): number {
-    return Tone.getTransport().seconds
+    return Tone.now()
   }
 
   private passTime(): number {
@@ -336,9 +378,9 @@ export class Looper {
     return length > 0 ? ((elapsed % length) + length) % length : elapsed
   }
 
-  private begin(state: LoopState): void {
+  private begin(state: LoopState, at?: number): void {
     this.state = state
-    this.passStart = this.now()
+    this.passStart = at ?? this.now()
     if (this.loop && this.loop.lengthSeconds > 0) this.schedule()
     // The click has done its job; whatever is meant to take over, takes over.
     if (state === 'recording') this.onRecord?.()
@@ -359,6 +401,17 @@ export class Looper {
     const length = this.loop?.lengthSeconds ?? 0
     if (length <= 0) return
 
+    /*
+     * Both the interval and the start are ticks.
+     *
+     * A bar-locked loop's length is exactly `bars × barTicks` — an integer, on
+     * the same grid as the beat — so it comes round on a bar line however long
+     * it runs, and follows the tempo instead of being frozen at whatever the
+     * BPM was when you recorded. Anchored on `passStart`, so a loop that began
+     * on a bar line keeps beginning on one.
+     */
+    const loopTicks =
+      this.loop?.bars != null ? this.loop.bars * barTicks(this.meter) : secondsToTicks(length)
     this.scheduleId = Tone.getTransport().scheduleRepeat(
       (time) => {
         this.passStart = time
@@ -373,8 +426,8 @@ export class Looper {
         }
         this.play(time)
       },
-      length,
-      this.now() + length,
+      atTick(loopTicks),
+      atTick(ticksAt(this.passStart) + loopTicks),
     )
   }
 

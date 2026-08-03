@@ -28,6 +28,7 @@ import * as Tone from 'tone'
 import type { Beat, Meter } from '../core/beats.js'
 import type { MidiNote } from '../core/types.js'
 import { bassAt } from './bass.js'
+import { beatTicks, ticksAt } from './clock.js'
 import { Drums } from './drums.js'
 import { decayFor, soundAt } from './sounds.js'
 import type { Sound } from './sounds.js'
@@ -574,13 +575,21 @@ class Synth {
       this.metronomeId = undefined
     }
     if (!on) return
-    let beat = 0
-    // The accent is the bar line, so the repeat has to know the meter — a click
-    // that accents every fourth beat in seven-eight is worse than one that never
-    // accents at all, because it confidently tells you the wrong thing.
+    /*
+     * The accent is the bar line, so the repeat has to know the meter — a click
+     * that accents every fourth beat in seven-eight is worse than one that never
+     * accents at all, because it confidently tells you the wrong thing.
+     *
+     * And *which* beat is read off the clock rather than counted from whenever
+     * you switched it on. Counted, the downbeat landed wherever you happened to
+     * press, so the click, the beat and the loop each insisted on a different
+     * bar line. All three now anchor to transport zero, which is the only way
+     * "one BPM drives everything" (research/08 §Master clock) is true rather
+     * than merely tempo-matched.
+     */
     this.metronomeId = Tone.getTransport().scheduleRepeat((time) => {
-      this.click(time, beat % meter.beats === 0)
-      beat += 1
+      const beat = Math.round(ticksAt(time) / beatTicks(meter)) % meter.beats
+      this.click(time, beat === 0)
     }, meter.unit)
   }
 

@@ -30,6 +30,7 @@ import * as Tone from 'tone'
 
 import { beatSteps, hitsAt, swingOf } from '../core/beats.js'
 import type { Beat, DrumVoice } from '../core/beats.js'
+import { stepTicks, ticksAt } from './clock.js'
 
 /** One drum: something that can be struck at a time, with a velocity. */
 interface Piece {
@@ -44,7 +45,6 @@ export class Drums {
 
   private beat: Beat | undefined
   private scheduleId: number | undefined
-  private step = 0
 
   constructor(destination: Tone.ToneAudioNode) {
     this.build(destination)
@@ -218,35 +218,41 @@ export class Drums {
    * of Beats" costs nothing here, which is the point of one clock driving
    * everything (research/08 §Master clock).
    *
-   * Swapping beats while one is running deliberately **keeps the step counter**.
-   * A drum machine that jumped to the top of the pattern every time you turned
-   * the dial would land you mid-bar and out of phase with the loop you are
-   * recording over; auditioning has to stay on the grid to be worth anything.
+   * **Which step plays is read off the clock, not counted.** A counter starting
+   * at zero whenever you pressed the dial put the pattern's downbeat at an
+   * arbitrary sixteenth of the bar, so the beat, the metronome and the loop each
+   * ran on their own private grid — and a loop recorded against the beat came
+   * back half a bar out from it, with nothing on screen to explain why.
+   *
+   * Deriving the step from transport time anchors every pattern to the one grid
+   * at transport zero. Starting a beat mid-bar drops you into the middle of it,
+   * which is what any drum machine slaved to a clock does, and swapping beats
+   * keeps phase for free rather than by remembering to.
    */
   setBeat(beat: Beat | undefined): void {
     if (beat === this.beat) return
-    const wasRunning = this.beat !== undefined
     this.beat = beat
 
     if (!beat) {
       this.unschedule()
       return
     }
-
-    // Starting from cold begins at the top; swapping mid-flight does not.
-    if (!wasRunning) this.step = 0
     this.unschedule()
 
     this.scheduleId = Tone.getTransport().scheduleRepeat((time) => {
       const current = this.beat
       if (!current) return
-      const at = this.step % beatSteps(current)
-      this.step += 1
-      // A step's length is read every time rather than once at scheduling,
-      // because the tempo moves underneath a running beat — "turn the BPM Dial
-      // to change the tempo of Beats" (§11.4). Cached, the swing would stay at
-      // the old absolute offset and the groove would lean further the slower
-      // you went.
+      /*
+       * The step comes from the transport's own tick position, which is the
+       * only clock that means anything musically. `time` is audio time — close
+       * to transport seconds and equal to neither once the tempo has moved —
+       * so it is converted rather than divided.
+       */
+      const total = beatSteps(current)
+      const at = ((Math.round(ticksAt(time) / stepTicks(current)) % total) + total) % total
+      // A step's length in *seconds* is what swing needs, and it is read every
+      // time rather than cached, because the tempo moves underneath a running
+      // beat — "turn the BPM Dial to change the tempo of Beats" (§11.4).
       const lag = swingOf(current, at) * Tone.Time(current.step).toSeconds()
       for (const hit of hitsAt(current, at)) {
         this.pieces.get(hit.voice)?.trigger(time + lag, hit.velocity)

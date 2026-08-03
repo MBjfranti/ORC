@@ -162,6 +162,64 @@ The **glance** is the one thing still timed (1.2s). It really is feedback: a
 number thrown up by a turn, over whatever you were looking at, with nothing to
 leave.
 
+## One grid — the three clocks bug
+
+**Tone hands you three times and they are not interchangeable.**
+`Transport.seconds` is wall-clock since start; `Transport.ticks` is musical
+position and is *what scheduling actually uses*; `context.currentTime` is the
+audio clock a synth wants. Seconds and ticks agree only while the tempo never
+changes — measured here after ordinary use, they were **1.68 bars apart**.
+
+That was not cosmetic. `Transport.scheduleOnce(cb, t)` takes seconds and
+converts to ticks at the *current* tempo, so a value read from
+`Transport.seconds` mapped to a tick position well behind where the transport
+had reached — the event was already in the past and **never fired**. A
+bar-locked loop counted in and then sat in `counting` forever. It only happened
+after you had touched the BPM dial, which is what made it look like flakiness.
+`arm()` was also passing a transport time straight to `synth.click()`, which
+wants audio time.
+
+`engine/clock.ts` now owns the rule: **position is ticks, duration is audio
+seconds, and inside a transport callback the `time` you are handed is the bridge
+between them.** `barTicks`, `beatTicks`, `stepTicks`, `nextBar`, `atTick`,
+`ticksAt`.
+
+Separately, all three sequencers had a *private* grid, each starting whenever
+its own button was pressed — the drum pattern counted steps from when you
+started it, the metronome counted beats from when you toggled it, and the loop
+began wherever your finger landed. So a loop recorded over a beat came back half
+a bar against it. All three now derive their position from ticks, anchored at
+transport zero.
+
+Verified: armed deliberately mid-bar with seconds/ticks 1.68 bars apart, the
+recording began at tick 18432 — **exactly 24 bars from zero, 0ms off the bar
+line** — and a sixteen-step pattern reads **step 0** at that instant. Measured
+after several passes, so the repeat stays locked and not just the start.
+
+A bar-locked loop's repeat interval is now `bars × barTicks` rather than a
+frozen number of seconds, so it follows the tempo instead of drifting out of the
+beat when you turn the BPM dial.
+
+## What a layer does and does not carry
+
+Overdub layers record **absolute MIDI notes**, so the voicing you played is
+baked in: record a triad, move Chord Voicing, overdub, and you get a genuine
+stacked voicing. Verified — layers came back `[60,64,67]` and `[72,76,79]`.
+This is the manual's own tip (§12.7): "use Loop Mode in Overdub to record one
+note of the chord at a time… letting you experiment with complex chord
+voicings".
+
+**Sound is not per-layer, and on the hardware cannot be.** It is a note looper:
+"it records your performance and replays it through the current sound, which is
+why changing the sound after recording changes the playback" (research/08). All
+layers therefore speak with whichever preset is loaded now.
+
+Per-layer timbre would be a real webapp improvement (research/11 territory) but
+it is an architectural change, not a flag: presets within one engine share a
+single `PolySynth`, so two `sub` presets cannot sound at once. It needs a synth
+pool keyed by preset, and it is a deliberate departure from the hardware. Not
+done; flagged.
+
 ## Still not built
 
 | Thing | Notes |
