@@ -349,6 +349,29 @@ export interface PanelState {
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 
+/** How the pads and the keys interact — `Options → Play Style` (§14.5). */
+export type PlayStyle = 'simple' | 'advanced' | 'free'
+
+export const PLAY_STYLES: readonly PlayStyle[] = ['simple', 'advanced', 'free']
+
+/** Read through the menu row, so there is one copy of the setting. */
+export const playStyleOf = (s: PanelState): PlayStyle =>
+  PLAY_STYLES[s.optionValue.playStyle ?? 2] ?? 'free'
+
+/**
+ * What adding an extension to a sounding chord does — §14.6.
+ *
+ * > "Add Note – Adds only the additional extension without retriggering the
+ * > full chord. Play Chord – Replays the full chord when extensions are added."
+ *
+ * §14.6's own note scopes it: "In Advanced and Free modes". Simple latches its
+ * chord at the key, so there is nothing for it to mean there.
+ */
+export type ExtensionMode = 'addNote' | 'playChord'
+
+export const extensionModeOf = (s: PanelState): ExtensionMode =>
+  (s.optionValue.extensionAddition ?? 0) === 1 ? 'playChord' : 'addNote'
+
 /** The app's own version, standing in for §14.13's firmware version. */
 export const APP_VERSION = '0.1.0'
 

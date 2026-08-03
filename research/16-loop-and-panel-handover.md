@@ -327,12 +327,55 @@ same mark the FX rack puts on an effect it does not have:
 | `Battery` | **built** — read from the browser. A laptop has one, so this is answerable rather than imitated |
 | `Version` | **built** — the app's version standing in for §14.13's firmware version |
 | `View` | inert — the five other view modes are the open item below |
-| `Play Style`, `Extension Addition`, `Single Note Mode`, `Secret Chords` | inert — real behavioural settings, none built |
+| `Play Style` | **built** — Simple / Advanced / Free, see below |
+| `Extension Addition` | **built** — `Add Note` or `Play Chord`, scoped to Advanced and Free per §14.6 |
+| `Single Note Mode`, `Secret Chords` | inert — real behavioural settings, not built |
 | `Velocity Sense` | inert **and will stay so** — a computer keyboard sends no velocity. Nothing to sense until MIDI input exists |
 | `Audio Output`, `Auto Power Off`, `Upgrade firmware`, `MIDI Channels` | hardware — speakers vs a headphone jack, a battery timeout, firmware. A tab has none of them |
 
 Quantization previously existed twice: `loopGrid` in the store *and* the Options
 row. Removed — the menu row is the only copy.
+
+### Play Style — how the pads and keys interact (§14.5)
+
+Three modes, and they differ in exactly one thing: **when the pads are allowed
+to reach a chord that is already sounding.**
+
+| | key alone | pad after key | pad after *releasing* a pad |
+|---|---|---|---|
+| **Simple** | silent | nothing — chord is latched at the key | nothing |
+| **Advanced** | single note | forms the chord | nothing — the chord stands |
+| **Free** | single note | forms the chord | switches it, repeatedly |
+
+Verified by spying on what reaches the synth, which is the semantics rather than
+a proxy for it:
+
+- Simple, pad-then-key: `48 52 55`; release the pad → nothing (it sustains);
+  press `min` → **nothing**. That is "you cannot change the chord type without
+  releasing the key first".
+- Advanced and Free, key alone: `48`; then the `maj` pad adds `52 55` **without
+  retriggering the root** — "press a key to play a single note, and then press a
+  Chord Type button while the key is still held".
+- After releasing the pad and pressing `min`: Advanced does nothing, Free plays
+  `51`. That release is Free's whole stated difference.
+
+**A bare key in Simple is silent, and that is MANUAL SILENT.** §14.5 says only
+that you must hold a pad first and never says what a lone key does. Silence is
+the reading that makes that sentence literally true; a single note is the
+feature §14.5 uses to *distinguish* Advanced, and a default major chord would
+invent harmony nobody asked for and make the `maj` pad redundant.
+
+### Extension Addition (§14.6)
+
+`Add Note` adds `62` alone; `Play Chord` replays `48 52 55 62`. `Add Note` is
+nearly free — `Player.update` already diffs and starts only what was not
+sounding.
+
+**Scoped to extension changes, and that was a bug first.** Written as "retrigger
+on any recolour", simply *forming* a chord played it twice — once from the key,
+once from the effect that follows the pad — because a type change also reaches
+`recolour`. §14.6 says "replays the full chord when **extensions are added**",
+so the trigger now compares the extension set against the last one.
 
 ## Still not built
 

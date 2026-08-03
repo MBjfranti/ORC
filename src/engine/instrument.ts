@@ -32,8 +32,9 @@ import { routeKeypress } from './bass.js'
 import type { Resolved } from '../core/resolve.js'
 import type { MidiNote, PitchClass } from '../core/types.js'
 import { nearestPosition } from '../core/voicing.js'
-import { usePanel } from '../state/panel.js'
+import { extensionModeOf, playStyleOf, usePanel } from '../state/panel.js'
 import type { PanelState } from '../state/panel.js'
+import type { ChordType, Extension } from '../core/types.js'
 import type { Looper } from './looper.js'
 import { Player } from './player.js'
 import type { Synth } from './synth.js'
@@ -49,6 +50,10 @@ export interface View {
 }
 
 const EMPTY: View = { sounding: undefined, pressed: undefined }
+
+/** Same extensions, order-insensitively — the pads can be pressed in any order. */
+const sameExtensions = (a: readonly Extension[], b: readonly Extension[]): boolean =>
+  a.length === b.length && a.every((x) => b.includes(x))
 
 /** Dev-only ring of recent key-to-synth times, in ms. Read from the console. */
 const latency: number[] = []
@@ -135,8 +140,49 @@ export class Instrument {
 
   // --- playing -------------------------------------------------------------
 
+  /**
+   * A key went down — and what that means depends on `Options → Play Style`.
+   *
+   * > **Simple** — "You need to press and hold a Chord Type button *before* you
+   * > press a key… The chord will sustain as long as you hold the key, even if
+   * > you release the Chord Type button. You cannot change the chord type
+   * > without releasing the key first."
+   * >
+   * > **Advanced** — "You can press a key to play a single note, and then press
+   * > a Chord Type button while the key is still held to trigger the chord."
+   * >
+   * > **Free** — "…just like Advanced Mode, but… chords can be switched or
+   * > re-triggered repeatedly after releasing either the Chord Type button or
+   * > Key." (§14.5)
+   *
+   * So Simple *latches* the chord at the key, and the other two let the pads
+   * keep working afterwards — Advanced once, Free for as long as you like.
+   */
   press(root: PitchClass): void {
     if (!this.heldRoots.includes(root)) this.heldRoots.push(root)
+    const s = usePanel.getState()
+
+    this.padsSpent = false
+    this.chordFormed = s.heldTypes.length > 0
+
+    if (playStyleOf(s) === 'simple') {
+      // The type is decided here and cannot change until the key is released.
+      this.latchedTypes = [...s.heldTypes]
+      /*
+       * A bare key in Simple is **silent**, and that is **MANUAL SILENT**.
+       *
+       * §14.5 says only that you must hold a pad first; it never says what a
+       * lone key does. Silence is the reading that makes that sentence literally
+       * true. The alternatives both contradict something: a single note is the
+       * feature §14.5 uses to *distinguish* Advanced, and a default major chord
+       * would invent harmony nobody asked for and make the `maj` pad redundant.
+       */
+      if (this.latchedTypes.length === 0) {
+        this.silence()
+        return
+      }
+    }
+
     this.sound(root)
   }
 
@@ -155,6 +201,26 @@ export class Instrument {
     if (previous !== undefined) this.sound(previous)
     else this.silence()
   }
+
+  /**
+   * Play Style bookkeeping, all of it per-keypress.
+   *
+   * `latchedTypes` is Simple's frozen chord; `chordFormed` records that a chord
+   * ever existed for this key, and `padsSpent` that every pad has since been
+   * let go — which is the thing Advanced will not let you take back.
+   */
+  private latchedTypes: ChordType[] = []
+  private chordFormed = false
+  private padsSpent = false
+  /**
+   * The extensions in force last time anything sounded.
+   *
+   * `Play Chord` replays the chord "when **extensions are added**" (§14.6) — so
+   * it has to know that an extension is what changed. Without this it fired on
+   * any recolour, and simply forming a chord played it twice: once from the
+   * key, once from the effect that follows the pad.
+   */
+  private lastExtensions: readonly Extension[] = []
 
   /** True while a key is down, so the caller can skip a stale async start. */
   isHeld(root: PitchClass): boolean {
@@ -176,6 +242,7 @@ export class Instrument {
     if (previous?.bass !== undefined) this.looper.captureOff(previous.bass, 'bass')
     this.synth.bassOff()
 
+    this.lastExtensions = [...s.heldExtensions]
     const resolved = this.resolve(root, s, previous)
     const notes = resolved ? resolved.notes : [resolveSingleNote(root, s.octave)]
     // The bypass wins over the dial, so an articulation can be dropped for a
@@ -244,10 +311,21 @@ export class Instrument {
    * lean — it is bounded to nine candidate positions around wherever the dial
    * already sits, which smooths the transition without overruling the player.
    */
+  /**
+   * Which chord types are in force.
+   *
+   * Simple answers with what was held when the key went down, so releasing or
+   * changing a pad mid-note cannot move the chord. Everything else reads the
+   * pads live.
+   */
+  private typesFor(s: PanelState): readonly ChordType[] {
+    return playStyleOf(s) === 'simple' ? this.latchedTypes : s.heldTypes
+  }
+
   private resolve(root: PitchClass, s: PanelState, previous: Sounding | undefined) {
     const input = {
       root,
-      types: s.heldTypes,
+      types: this.typesFor(s),
       extensions: s.heldExtensions,
       keyMode: s.keyMode,
       key: s.key,
@@ -271,11 +349,32 @@ export class Instrument {
     return position === s.voicing ? probe : resolveChord({ ...input, voicing: position })
   }
 
-  /** Re-colour whatever is sounding, without re-articulating it. */
+  /**
+   * Re-colour whatever is sounding, without re-articulating it.
+   *
+   * This is where the pads reach a chord that is already down, so it is where
+   * the three Play Styles part company.
+   */
   recolour(): void {
     const held = this.current
     if (!held) return
     const s = usePanel.getState()
+    const style = playStyleOf(s)
+
+    if (style !== 'simple') {
+      /*
+       * Letting go of every pad *spends* them, in Advanced.
+       *
+       * Free's stated difference is that chords can be "switched or re-triggered
+       * repeatedly **after releasing** either the Chord Type button or Key", so
+       * that release is exactly what Advanced does not let you undo — the chord
+       * stands until the key comes up. Pads pressed while others are still held
+       * are not a release and keep working in both.
+       */
+      if (s.heldTypes.length === 0 && this.chordFormed) this.padsSpent = true
+      if (style === 'advanced' && this.padsSpent) return
+      if (s.heldTypes.length > 0) this.chordFormed = true
+    }
     // Keyed by what was pressed, not by the chord's root — Key Mode can move
     // the latter without moving the former.
     const root = this.currentRoot
@@ -285,7 +384,7 @@ export class Instrument {
       // Already transposed once when it was resolved, so re-colouring must not
       // shift it again — this root is an outcome, not a key that was pressed.
       root: held.spec.root,
-      types: s.heldTypes,
+      types: this.typesFor(s),
       extensions: s.heldExtensions,
       keyMode: s.keyMode,
       key: s.key,
@@ -295,6 +394,10 @@ export class Instrument {
     })
     if (!resolved) return
 
+    // §14.6 is about extensions specifically, so a type change must not trip it.
+    const addedExtension = !sameExtensions(s.heldExtensions, this.lastExtensions)
+    this.lastExtensions = [...s.heldExtensions]
+
     const mode = s.performOn ? s.performMode : 'off'
     if (isCycle(mode)) {
       // Swap the step data under the running loop so it keeps its place.
@@ -302,6 +405,18 @@ export class Instrument {
         root,
         performChord(resolved.notes, mode, { amount: s.performAmount, bpm: s.bpm }),
       )
+    } else if (style !== 'simple' && extensionModeOf(s) === 'playChord' && addedExtension) {
+      /*
+       * > "Play Chord – Replays the full chord when extensions are added."
+       * > (§14.6)
+       *
+       * Against `Add Note`, which "adds only the additional extension without
+       * retriggering the full chord" — and that is what `update` already does,
+       * since it diffs and only starts what was not already sounding. Scoped to
+       * Advanced and Free by §14.6's own note.
+       */
+      this.player.stopAll()
+      this.player.start(root, performChord(resolved.notes, mode, { amount: s.performAmount, bpm: s.bpm }))
     } else {
       this.player.update(root, resolved.notes)
     }

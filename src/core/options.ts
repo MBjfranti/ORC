@@ -100,20 +100,22 @@ export const OPTIONS: readonly OptionRow[] = [
     values: ['Performance', 'Bass', 'Chord'],
     built: false,
   },
-  // §14.5 — how the pads and keys interact. Ours is closest to `Free`.
+  // §14.5 — how the pads and the keys interact. The one Options row that
+  // changes how the instrument is *played*; see `engine/instrument.ts`.
   {
     id: 'playStyle',
     label: 'Play Style',
     kind: 'enum',
     values: ['Simple', 'Advanced', 'Free'],
-    built: false,
+    built: true,
   },
+  // §14.6, and only meaningful in Advanced and Free by the manual's own note.
   {
     id: 'extensionAddition',
     label: 'Extension Addition',
     kind: 'enum',
     values: ['Add Note', 'Play Chord'],
-    built: false,
+    built: true,
   },
   // §14.7. The FAQ calls the same setting `Single Notes` with values
   // `Full Octave` / `Split Mode`; the section heading's wording is used here.
