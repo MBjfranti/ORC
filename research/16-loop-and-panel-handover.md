@@ -1,21 +1,18 @@
 # 16 — Loop, the panel, and what is still open
 
-Written mid-session, before compacting. Everything below `58923bd` is committed;
-**everything in this document is not**. Seven files are dirty.
-
----
-
-## Commit first
+Running notes on the panel: what is built, what the measurements were, and what
+is still open. **All of it is committed** as of `16288a6`.
 
 ```
 git log --oneline
+  16288a6  Build the beat machine, and fix the browse timer it exposed
+  5391464  Implement the console's playing screen and chord linger
+  ce9fb60  Implement Loop Mode UI, encoder, and CSS-animated ring
   58923bd  Build the encoder panel: Bass, FX, Key, and one gesture grammar
   fadf5d0  Derive the fifty sounds from a real GM timbre table
 ```
 
-Uncommitted: the Loop encoder, the looping border, BPM's tempo and metronome,
-the playing screen, and the browse-list timeout. `typecheck clean · 123 tests ·
-build clean` as of writing.
+`typecheck clean · 141 tests · build clean`.
 
 ## The ring — resolved, but read the history
 
@@ -104,13 +101,31 @@ reads as a hang.
 inverted bar, key name top-left as `C# Major`, transposition top-right as
 `Trans +1`. Chord below, lingering ~1.4s after release (v3.90 behaviour).
 
-### Menus vs browses
+### Nothing on the screen times out
 
-research/13 §B.6 keeps menus sticky and lets value readouts expire. Sound, Bass
-and Key are **browses** — they return to the playing screen ~2.6s after you stop
-turning. The FX rack, bass modes and loop menus are **menus** and stay until you
-leave them. `Exit` existing as a list row is the evidence menus were never meant
-to time out.
+Every list and menu now stays until you leave it, and **`Esc` is how you
+leave** — it returns to the playing screen.
+
+The earlier reading of research/13 §B.6 split lists into "browses" that expired
+after 2.6s and "menus" that did not. It does not survive a long list: the beat
+list is twenty-six rows, so it closed while you were still reading it. More
+basically, it let the screen change with nobody touching anything, which is the
+one thing a panel should not do. `Exit` existing as a list row is the evidence
+menus were never meant to time out; the same argument covers the rest.
+
+`screenTouched`, `touchScreen`, the `browse` flag and `BROWSE_MS` are all gone
+with it — there is nothing left to re-arm.
+
+**Escape no longer panics unconditionally.** It backs out of whatever is open
+and stops there; only with nothing open does it stop the notes. That layering
+matters now that Escape is the ordinary way to close a list: dismissing the
+Sound list mid-chord must not kill the chord. Verified — a chord ringing at
+0.075 RMS was still at 0.070 after the Escape that closed the beat list, and
+dropped to 0.005 on the next one.
+
+The **glance** is the one thing still timed (1.2s). It really is feedback: a
+number thrown up by a turn, over whatever you were looking at, with nothing to
+leave.
 
 ## Still not built
 

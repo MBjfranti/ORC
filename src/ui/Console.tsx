@@ -37,7 +37,6 @@ import {
   columnIndices,
   ENCODERS,
   encoderLegend,
-  isBrowse,
   isPlaceholder,
   loopRows,
   rowIndices,
@@ -421,30 +420,21 @@ function StatScreen({ sounding }: { sounding: Sounding | undefined }) {
   }, [glance?.stamp, glance, clearGlance])
 
   /*
-   * A *browse* list expires too. Menus do not.
+   * **Nothing else on this screen expires.** Lists and menus alike stay until
+   * you leave them, and `Esc` is how you leave.
    *
-   * Turning Sound to pick a patch is choosing a value, and once you have
-   * chosen, being left staring at the list is the panel refusing to get out of
-   * the way. A menu is different: it is somewhere you are, and you leave it by
-   * saying so (research/13 §B.6).
+   * Browse lists used to time out after 2.6 seconds, on the reading of
+   * research/13 §B.6 that a list of values is feedback rather than a place.
+   * That reading does not survive contact with a long list: the beat list is
+   * twenty-six rows, so it closed while you were still reading it, and being
+   * interrupted by the panel is worse than having to press a key to leave. It
+   * also meant the screen could change without anyone touching anything, which
+   * is the one thing a panel should never do.
+   *
+   * The glance above is the exception and stays timed, because it genuinely is
+   * feedback: a number thrown up by a turn, over whatever you were looking at,
+   * with nothing to leave.
    */
-  /*
-   * `screenList` is in the dependencies as well as `screenTouched`, and both
-   * are load-bearing. Opening a different encoder's list re-stamps
-   * `screenTouched` — that is what makes reaching for a second knob count as an
-   * interaction rather than inheriting the first one's expiring timer. Keeping
-   * the index here too means the effect tears down and re-arms even in the
-   * pathological case where two opens land on the same millisecond.
-   */
-  const open = s.screenList
-  const browsing = isBrowse(open)
-  const touched = s.screenTouched
-  const setScreenList = s.setScreenList
-  useEffect(() => {
-    if (!browsing) return
-    const timer = window.setTimeout(() => setScreenList(null), BROWSE_MS)
-    return () => window.clearTimeout(timer)
-  }, [browsing, open, touched, setScreenList])
 
   /*
    * The quick key select prompt outranks everything, because it is the one
@@ -694,16 +684,6 @@ const DASH_ORIGIN = -25
 
 /** How long a value readout stays up after the last turn. research/13 §B.6. */
 const GLANCE_MS = 1200
-
-/**
- * How long a browse list lingers after you stop turning.
- *
- * Longer than the glance, because a list is something you are reading rather
- * than a number you are watching move — but it does expire, because picking a
- * sound and then being stuck looking at the list is the panel getting in the
- * way of the instrument.
- */
-const BROWSE_MS = 2600
 
 /** Beats in the count-in bar. */
 const BEATS_IN = 4

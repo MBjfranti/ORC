@@ -245,13 +245,6 @@ export interface PanelState {
     stamp: number
   } | null
 
-  /**
-   * When the screen was last interacted with.
-   *
-   * Only a *browse* list watches this — it expires like a value readout, while
-   * a menu stays until you leave it (research/13 §B.6).
-   */
-  screenTouched: number
 
   /** Held chords keep sounding after the hands leave. */
   latched: boolean
@@ -326,7 +319,6 @@ export interface PanelState {
   setDialFocus: (index: number) => void
   setScreenList: (index: number | null) => void
   showGlance: (value: string, label: string, level?: number, secondary?: boolean) => void
-  touchScreen: () => void
   clearGlance: () => void
 }
 
@@ -461,7 +453,6 @@ export const usePanel = create<PanelState>((set) => ({
   dialFocus: 0,
   screenList: null,
   glance: null,
-  screenTouched: 0,
   latched: false,
 
   setHeldType: (type, held) =>
@@ -738,29 +729,15 @@ export const usePanel = create<PanelState>((set) => ({
       }
     }),
 
-  /*
-   * Opening a screen **is** an interaction, so it re-arms the browse timer.
-   *
-   * Without this the timer belonged to whichever list armed it: browse Sound,
-   * then reach for Bass two seconds later, and Bass's list vanished a fraction
-   * of a second after opening because Sound's timer was still running and the
-   * effect had no reason to restart. The knob you just reached for is the last
-   * thing that should be timing out.
-   *
-   * It lives here rather than at the call sites because there are several —
-   * the digit row, the hold menus, `Exit` — and every one of them is a hand
-   * doing something.
-   */
   setScreenList: (screenList) =>
     set(
       screenList === null
         ? { screenList, fxAdjusting: false, performAdjusting: false }
-        : { screenList, screenTouched: performance.now() },
+        : { screenList },
     ),
   showGlance: (value, label, level, secondary) =>
     set({ glance: { value, label, level, secondary, stamp: performance.now() } }),
   clearGlance: () => set({ glance: null }),
-  touchScreen: () => set({ screenTouched: performance.now() }),
 }))
 
 /** Which pitch class each physical key plays, given the current layout. */

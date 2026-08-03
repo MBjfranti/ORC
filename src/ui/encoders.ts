@@ -92,16 +92,6 @@ export interface Encoder {
   /** What the screen shows while this encoder is selected. */
   readonly list?: (s: PanelState) => { rows: Row[]; cursor: number }
   /**
-   * The list is a *browse*, not a menu — so it expires like a value readout.
-   *
-   * research/13 §B.6 draws the line here: a menu is somewhere you *are* and
-   * stays until you leave it, but a readout of which value is selected is
-   * feedback and should get out of the way once you have chosen. Sound, Bass
-   * and Key browse. The FX rack, the bass behaviour menu and the loop menus are
-   * menus and stay put.
-   */
-  readonly browse?: boolean
-  /**
    * The transient value readout raised by turning this knob — research/13 §C.3,
    * measured from the illustrations: a giant number filling 84% of the display
    * with its label along the bottom, gone again about 1.2 seconds later.
@@ -321,16 +311,6 @@ export const ENCODERS: readonly Encoder[] = [
       rows: SOUNDS.map((_, i) => ({ label: soundLabel(i) })),
       cursor: s.soundIndex,
     }),
-    /*
-     * Browsing is a *value*, not a menu, so its screen expires.
-     *
-     * research/13 §B.6 keeps menus sticky and lets value readouts time out, and
-     * PDF p5 shows Sound's own readout as a glance — `20` over `Sound`. Picking
-     * a sound and being left staring at the list is the wrong end of that
-     * distinction: you chose, so the panel should get out of the way and show
-     * you what you are playing again.
-     */
-    browse: true,
     // Fifty of them, so the dial wants real travel rather than a hair-trigger.
     sensitivity: 8,
   },
@@ -464,7 +444,6 @@ export const ENCODERS: readonly Encoder[] = [
       const i = Math.max(0, Math.min(KEYS.length - 1, keyIndex(s.key) + d))
       s.setKey(KEYS[i]!)
     },
-    browse: true,
     press: (s) => {
       s.toggleKeyMode()
       // v3.90: "Turning Key off now shows an explicit `Off` on the display."
@@ -514,7 +493,6 @@ export const ENCODERS: readonly Encoder[] = [
     // hold-then-turn means on the hardware: one encoder, two lists, and the
     // one on screen is the one you are turning.
     turn: (s, d) => (s.screenList === BASS_MODE_LIST ? s.cycleBassMode(d) : s.cycleBassSound(d)),
-    browse: true,
     press: (s) => s.toggleBass(),
     lamp: (s) => s.bassOn, // inferred from the idiom, not documented
     hold: (s) => s.setScreenList(BASS_MODE_LIST),
@@ -716,17 +694,6 @@ export function screenLabel(open: number): string {
   return ENCODERS[open]?.label ?? 'Display'
 }
 
-/**
- * Whether the open screen expires, or is somewhere you *are*.
- *
- * research/13 §B.6 draws the line at menu versus value: the FX rack, the bass
- * behaviour menu and the loop menus stay until you leave them, and everything
- * that is a list of values you are choosing between gets out of the way once
- * you have stopped choosing. The beat list is the second kind — picking a
- * groove is picking a value, and it is not a place you live.
- */
-export const isBrowse = (open: number | null): boolean =>
-  open !== null && (open === BEAT_LIST || ENCODERS[open]?.browse === true)
 
 /** A knob that is on the panel but not built yet. */
 export const isPlaceholder = (e: Encoder) => e.turn === undefined
@@ -743,18 +710,6 @@ export function turnEncoder(index: number, s: PanelState, delta: number): void {
   if (!encoder?.turn) return
   encoder.turn(s, delta)
   const next = usePanel.getState()
-  /*
-   * Every turn resets the browse timer, so a list only expires once you have
-   * stopped moving through it.
-   *
-   * Keyed on **what is open**, not on which knob is being turned. Those come
-   * apart on BPM: the beat list is a browse but the encoder is not flagged as
-   * one, because its own list is the tempo. Keyed the old way, scrolling
-   * twenty-six rows re-armed nothing and the list closed underneath you
-   * two and a half seconds in — every time, since the list is longer than the
-   * timer.
-   */
-  if (isBrowse(next.screenList)) next.touchScreen()
   if (!encoder.readout) return
   // A readout may decline — FX has nothing to add while its own menu is the
   // thing on screen, and covering a live list with a number would be worse

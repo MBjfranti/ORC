@@ -538,15 +538,31 @@ export default function App() {
           looper.reset()
           s.setLoopScreen(null)
           break
-        case 'Escape':
+        /*
+         * Escape returns to the playing screen — and that is now the *only* way
+         * back, because nothing times out any more.
+         *
+         * It backs out of whatever is open and stops there. It used to also
+         * panic every time, which was survivable while lists closed themselves
+         * and is not now: closing the Sound list is an ordinary thing to do
+         * mid-chord, and killing every sounding note to do it would make the
+         * one key you need the one key you cannot afford to press.
+         *
+         * So the panic moves to the bottom of the stack. With nothing open
+         * there is nothing to back out of, and Escape means what it means
+         * everywhere else — stop.
+         */
+        case 'Escape': {
+          e.preventDefault()
+          const showing = s.keySelect || s.screenList !== null || s.loopScreen !== null
           s.cancelKeySelect()
           s.setScreenList(null)
-          // Escape means "get me out" everywhere else on the panel, so it has
-          // to mean it here too. The loop keeps playing — leaving Loop Mode is
-          // not the same as stopping, which is what `\` is for.
+          // The loop keeps playing — leaving Loop Mode is not the same as
+          // stopping it, which is what `\` is for.
           s.setLoopScreen(null)
-          instrument.panic()
+          if (!showing) instrument.panic()
           break
+        }
       }
     }
 
@@ -673,7 +689,12 @@ export default function App() {
             <span>Hold a pad, press a key</span>
             <span>
               Encoders <kbd>1</kbd>–<kbd>8</kbd> · turn <kbd>-</kbd>
-              <kbd>=</kbd> · tap again for on/off · hold to edit · close <kbd>0</kbd>
+              <kbd>=</kbd> · tap again for on/off · hold to edit
+            </span>
+            {/* Nothing on the screen times out, so the way back has to be
+                printed where the other gestures are. */}
+            <span>
+              Back to the playing screen <kbd>esc</kbd> · or <kbd>0</kbd>
             </span>
             <span>
               Voicing <kbd>←</kbd>
@@ -686,7 +707,7 @@ export default function App() {
               <kbd>=</kbd> transposes
             </span>
             <span>
-              Loop <kbd>6</kbd> · leave it <kbd>esc</kbd> · stop and clear <kbd>\</kbd>
+              Loop <kbd>6</kbd> · stop and clear <kbd>\</kbd>
             </span>
             <span>
               Latch <kbd>space</kbd> · Loop <kbd>B</kbd>
