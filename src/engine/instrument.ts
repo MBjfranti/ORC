@@ -31,8 +31,8 @@ import { resolveChord, resolveSingleNote } from '../core/resolve.js'
 import { routeKeypress } from './bass.js'
 import { getMidi } from './midi.js'
 import type { Resolved } from '../core/resolve.js'
-import type { MidiNote, PitchClass } from '../core/types.js'
-import { nearestPosition } from '../core/voicing.js'
+import type { ChordSpec, MidiNote, PitchClass } from '../core/types.js'
+import { bassVoice, nearestPosition } from '../core/voicing.js'
 import { extensionModeOf, playStyleOf, secretsOn, splitPointOf, usePanel } from '../state/panel.js'
 import type { PanelState } from '../state/panel.js'
 import type { ChordType, Extension } from '../core/types.js'
@@ -283,10 +283,7 @@ export class Instrument {
 
     let bass: MidiNote | undefined
     if (routing.bass) {
-      // Two octaves under the chord's own root, so it anchors without muddying
-      // the voicing above it. With no chord held there is no `resolved` to take
-      // a root from, so the key you pressed *is* the root.
-      bass = 12 * (s.octave - 1) + (resolved ? resolved.spec.root : root)
+      bass = this.bassFor(s, resolved ? resolved.spec.root : root, resolved?.spec)
       this.synth.bassOn(bass)
       this.looper.captureOn(bass, 0.85, 'bass')
     }
@@ -315,6 +312,21 @@ export class Instrument {
         }
 
     this.notify()
+  }
+
+  /**
+   * Where the bass sits: two octaves under the chord's root, then walked by the
+   * Bass Voicing dial (§10.3).
+   *
+   * Two octaves down is what anchors it without muddying the voicing above it.
+   * With no chord held there is no spec to take intervals from, so the bass has
+   * only its own octaves to move through — which is the right answer for a
+   * single note anyway.
+   */
+  private bassFor(s: PanelState, rootPc: PitchClass, spec: ChordSpec | undefined): MidiNote {
+    const rootMidi = 12 * (s.octave - 1) + rootPc
+    const intervals = spec ? buildChord(spec) : [0]
+    return bassVoice(intervals, rootMidi, s.bassVoicing)
   }
 
   /**
@@ -436,7 +448,24 @@ export class Instrument {
       this.player.update(root, resolved.notes)
     }
 
-    this.current = { ...resolved, bass: held.bass }
+    /*
+     * The bass moves with its dial while the chord is held, which is the only
+     * way a voicing control is any use — you turn it to hear where the bass
+     * should sit, not to set it up for the next chord.
+     */
+    let bass = held.bass
+    if (bass !== undefined) {
+      const next = this.bassFor(s, resolved.spec.root, resolved.spec)
+      if (next !== bass) {
+        this.synth.bassOff()
+        this.looper.captureOff(bass, 'bass')
+        this.synth.bassOn(next)
+        this.looper.captureOn(next, 0.85, 'bass')
+        bass = next
+      }
+    }
+
+    this.current = { ...resolved, bass }
     this.notify()
   }
 

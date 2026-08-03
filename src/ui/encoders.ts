@@ -850,9 +850,10 @@ export const ENCODERS: readonly Encoder[] = [
   },
   {
     /*
-     * Not built. Needs its own voicing state before it can do anything — the
-     * bass currently tracks the octave setting rather than a voiced position,
-     * which is the open issue in research/15.
+     * The bass's own voicing — §10.3, "moving the voicing down results in
+     * lower, deeper bass notes; moving the voicing up shifts the bass notes
+     * higher in pitch". Independent of the chord's, which is the whole point of
+     * there being two dials.
      *
      * Also a shortcut modifier on the hardware: Bass Voicing + Loop hard-exits
      * loop mode (research/05).
@@ -862,6 +863,9 @@ export const ENCODERS: readonly Encoder[] = [
     shown: true,
     place: 'column',
     cap: 'black',
+    turn: (s, d) => s.nudgeBassVoicing(d),
+    readout: (s) => ({ value: signed(s.bassVoicing), label: 'Bass Voicing' }),
+    sensitivity: 8,
   },
 ]
 

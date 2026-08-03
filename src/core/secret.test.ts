@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 
 import { buildChord, chordName } from './chord.js'
 import { VIEW_MODES, viewPieces } from './options.js'
+import { BASS_HIGH, BASS_LOW, bassVoice, clampBassVoicing } from './voicing.js'
 import { resolveChord, resolveSingleNote } from './resolve.js'
 import { SECRET_CHORDS, secretFor, secretsEnabled } from './secret.js'
 import type { ChordType, Extension, PitchClass } from './types.js'
@@ -172,5 +173,50 @@ describe('view modes', () => {
     // core output". An out-of-range index must not blank the screen.
     expect(viewPieces(99)).toEqual(viewPieces(1))
     expect(VIEW_MODES).toHaveLength(6)
+  })
+})
+
+describe('bass voicing', () => {
+  it('sits on the root at position zero', () => {
+    // Which is where the bass was before the dial did anything, so switching it
+    // on changes nothing until you turn it.
+    const maj = [0, 4, 7]
+    expect(bassVoice(maj, 36, 0)).toBe(36)
+  })
+
+  it('walks the chord one note at a time, not in semitones', () => {
+    // §10.3 asks for higher and lower; the press quote asks for "walk through
+    // inversions one note at a time". Walking chord tones satisfies both — a
+    // bass on the third is the first inversion.
+    const maj = [0, 4, 7]
+    expect(bassVoice(maj, 36, 1)).toBe(40) // the third
+    expect(bassVoice(maj, 36, 2)).toBe(43) // the fifth
+    expect(bassVoice(maj, 36, 3)).toBe(48) // the root, an octave up
+  })
+
+  it('goes down as well as up', () => {
+    // "Moving the voicing down results in lower, deeper bass notes."
+    const maj = [0, 4, 7]
+    expect(bassVoice(maj, 36, -1)).toBe(31)
+    expect(bassVoice(maj, 36, -3)).toBe(24)
+    expect(bassVoice(maj, 36, -1)).toBeLessThan(bassVoice(maj, 36, 0))
+  })
+
+  it('handles a single note, which has only octaves to move through', () => {
+    expect(bassVoice([0], 36, 1)).toBe(48)
+    expect(bassVoice([0], 36, -1)).toBe(24)
+  })
+
+  it('stops before the bass leaves its register', () => {
+    // Above C4 it has stopped being a bass; below C1 it is inaudible.
+    const maj = [0, 4, 7]
+    const high = clampBassVoicing(maj, 36, 99)
+    const low = clampBassVoicing(maj, 36, -99)
+    expect(bassVoice(maj, 36, high)).toBeLessThanOrEqual(BASS_HIGH)
+    expect(bassVoice(maj, 36, low)).toBeGreaterThanOrEqual(BASS_LOW)
+  })
+
+  it('leaves a position that is already in range alone', () => {
+    expect(clampBassVoicing([0, 4, 7], 36, 2)).toBe(2)
   })
 })

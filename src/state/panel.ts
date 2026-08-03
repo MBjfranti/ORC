@@ -22,7 +22,7 @@ import { GRIDS, LOOP_BARS } from '../core/looper.js'
 import { nextFree } from '../core/slots.js'
 import type { Slots } from '../core/slots.js'
 import { readSlots, writeSlots } from '../engine/slots.js'
-import { clampVoicing } from '../core/voicing.js'
+import { clampBassVoicing, clampVoicing } from '../core/voicing.js'
 import type { Grid, Loop } from '../core/looper.js'
 import type { LoopState } from '../engine/looper.js'
 import { PERFORM_MODES } from '../core/performance.js'
@@ -97,6 +97,14 @@ export interface PanelState {
    * already imports from here, and the reverse would close the loop.
    */
   voicingFocus: 'chord' | 'bass'
+  /**
+   * The bass's own voicing position — §10.3, and independent of the chord's.
+   *
+   * "Two dedicated voicing controls for lead and bass let you walk through
+   * inversions one note at a time" (research/05). Zero is the root, which is
+   * where the bass sat before this dial did anything.
+   */
+  bassVoicing: number
   /** Follow the previous chord instead of jumping to an absolute position. */
   voiceLead: boolean
 
@@ -312,6 +320,7 @@ export interface PanelState {
   cancelKeySelect: () => void
 
   nudgeVoicing: (delta: number) => void
+  nudgeBassVoicing: (delta: number) => void
   setVoicingFocus: (which: 'chord' | 'bass') => void
   setVoicing: (position: number) => void
   nudgeOctave: (delta: number) => void
@@ -532,6 +541,7 @@ export const usePanel = create<PanelState>((set) => ({
   voicing: 0,
   octave: 3,
   voicingFocus: 'chord',
+  bassVoicing: 0,
   voiceLead: true,
 
   performMode: 'off',
@@ -687,6 +697,19 @@ export const usePanel = create<PanelState>((set) => ({
       const intervals = buildChord({ root: 0, type, extensions: s.heldExtensions })
       return {
         voicing: clampVoicing(intervals, 12 * (s.octave + 1), s.voicing + delta),
+      }
+    }),
+  /*
+   * Clamped against the chord under the hands, like `nudgeVoicing` — and
+   * against the bass's own register, because a bass walked up past middle C has
+   * stopped being one.
+   */
+  nudgeBassVoicing: (delta) =>
+    set((s) => {
+      const type = s.heldTypes[s.heldTypes.length - 1] ?? 'maj'
+      const intervals = buildChord({ root: 0, type, extensions: s.heldExtensions })
+      return {
+        bassVoicing: clampBassVoicing(intervals, 12 * (s.octave - 1), s.bassVoicing + delta),
       }
     }),
   setVoicingFocus: (voicingFocus) => set({ voicingFocus }),

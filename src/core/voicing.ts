@@ -155,3 +155,60 @@ function voiceLeadingCost(from: readonly MidiNote[], to: readonly MidiNote[]): n
 export function bassNote(root: number, octave: number): MidiNote {
   return 12 * (octave + 1) + root
 }
+
+/**
+ * Where the bass is allowed to go.
+ *
+ * Above C4 it has stopped being a bass. The floor is **E0**, around 20Hz and the
+ * bottom of hearing, rather than the C1 the bass already sits on by default —
+ * set there, the dial could not move down at all, which is the one direction
+ * §10.3 names first ("moving the voicing **down** results in lower, deeper bass
+ * notes"). A control that does nothing in the direction its documentation leads
+ * with is the same bug as not having built it.
+ */
+export const BASS_LOW = 16 // E0
+export const BASS_HIGH = 60 // C4
+
+/**
+ * The bass note at a given voicing position — §10.3.
+ *
+ * > "Similar to Chord Voicing, the Bass Voicing Dial allows you to modify the
+ * > way bass notes are played: moving the voicing **down** results in lower,
+ * > deeper bass notes; moving the voicing **up** shifts the bass notes higher
+ * > in pitch."
+ *
+ * It walks the chord's own notes rather than moving in semitones or plain
+ * octaves, which is the same thing `voiceChord` does for the chord — and it is
+ * the reading that makes both sources true at once. §10.3 asks only for higher
+ * and lower, and this delivers that; the press quote asks for "walk through
+ * inversions **one note at a time**", and a bass sitting on the third *is* the
+ * first inversion. A dial that only moved octaves would satisfy the first and
+ * miss the second entirely.
+ *
+ * Position 0 is the root, so the default is exactly where the bass sat before
+ * this dial existed. Moving off it is the player asking for a slash chord.
+ */
+export function bassVoice(
+  intervals: readonly number[],
+  rootMidi: MidiNote,
+  position: number,
+): MidiNote {
+  if (intervals.length === 0) return rootMidi
+  const n = intervals.length
+  // The same floor division `voiceChord` uses, so the two cannot disagree about
+  // what a negative position means.
+  const octave = Math.floor(position / n)
+  return rootMidi + intervals[((position % n) + n) % n]! + 12 * octave
+}
+
+/** Keep the dial from walking the bass off either end of its register. */
+export function clampBassVoicing(
+  intervals: readonly number[],
+  rootMidi: MidiNote,
+  position: number,
+): number {
+  let at = position
+  while (at > 0 && bassVoice(intervals, rootMidi, at) > BASS_HIGH) at--
+  while (at < 0 && bassVoice(intervals, rootMidi, at) < BASS_LOW) at++
+  return at
+}

@@ -553,6 +553,37 @@ seven-bit data, explicit note-off rather than zero-velocity note-on), because a
 wrong nibble is silent rather than loud and the only other way to find out is to
 open a DAW.
 
+### Bass Voicing (§10.3) — was a placeholder, now real
+
+The dial was on the panel with no `turn` at all, so `↓` focused it and `←`/`→`
+went nowhere. Reported as "bass voicing seems to not be working", which it was.
+
+> "Moving the voicing **down** results in lower, deeper bass notes. Moving the
+> voicing **up** shifts the bass notes higher in pitch." (§10.3)
+
+It **walks the chord's own notes**, not semitones and not plain octaves — the
+same maths `voiceChord` uses, so the two cannot disagree about what a negative
+position means. That is the reading which makes both sources true: §10.3 asks
+only for higher and lower, and the press quote asks for "walk through inversions
+**one note at a time**" — a bass sitting on the third *is* the first inversion.
+An octave-only dial would satisfy the first and miss the second entirely.
+
+Position 0 is the root, so switching it on changes nothing until you turn it.
+
+**The floor moved, and that was a second bug.** Set to C1 it matched where the
+bass already sits by default, so `down` clamped immediately and did nothing —
+the same "not working" feeling, in the one direction §10.3 names first. It is
+E0 now, around 20Hz.
+
+The bass **moves under a held chord**, which is the only way a voicing control
+is any use — you turn it to hear where the bass should sit, not to set it up for
+the next chord. `recolour` re-places it and re-triggers only when the note
+actually changes.
+
+Verified through the play path: `24 → 19 → 16` walking down (root, fifth below,
+third below), clamping there with no re-trigger, and back up through the root to
+the third at `28`. Chord voicing untouched throughout.
+
 ## Still not built
 
 | Thing | Notes |
@@ -560,7 +591,6 @@ open a DAW.
 | The Options settings marked inert above | Play Style is the biggest: it changes how pads and keys interact |
 | Phaser, Flanger, Drive, Tremolo, Ensemble | rows exist showing `--`; Tone has three of them |
 | Chord Voicing press → Split ↔ Octave | needs split-mode state |
-| Bass Voicing | placed, does nothing; needs its own voicing state |
 | The other four View modes | notes list, waveform, keyboard, Geek Out |
 
 ## The beat machine (built)

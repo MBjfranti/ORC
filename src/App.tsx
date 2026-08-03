@@ -208,6 +208,7 @@ export default function App() {
   const heldTypes = usePanel((s) => s.heldTypes)
   const heldExtensions = usePanel((s) => s.heldExtensions)
   const voicing = usePanel((s) => s.voicing)
+  const bassVoicing = usePanel((s) => s.bassVoicing)
   const octave = usePanel((s) => s.octave)
   const keyMode = usePanel((s) => s.keyMode)
   const key = usePanel((s) => s.key)
@@ -225,6 +226,7 @@ export default function App() {
     heldTypes,
     heldExtensions,
     voicing,
+    bassVoicing,
     octave,
     keyMode,
     key,
