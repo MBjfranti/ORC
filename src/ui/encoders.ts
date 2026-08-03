@@ -24,7 +24,9 @@
  */
 
 import { BEATS, beatLabel, clockRow, METERS } from '../core/beats.js'
-import { OPTIONS, optionById } from '../core/options.js'
+import { CHANNEL_VALUES, OPTIONS, optionById } from '../core/options.js'
+import { getMidi } from '../engine/midi.js'
+import type { Stream as MidiStream } from '../engine/midi.js'
 import { barsLabel, LOOP_BARS } from '../core/looper.js'
 import { nextFree, slotLabel, slotSummary } from '../core/slots.js'
 import { amountLabel, PERFORM_LABEL, PERFORM_MODES } from '../core/performance.js'
@@ -402,8 +404,45 @@ export const OPTIONS_LIST = 102
  * also all PDF p20 and p23 show, labels alone.
  */
 export function optionRows(s: PanelState): { rows: Row[]; cursor: number } {
+  /*
+   * The third level, which only `MIDI Channels` reaches: the operating
+   * system's output ports, or a stream's channel.
+   *
+   * An empty port list is the honest answer to the thing a browser cannot do —
+   * Web MIDI can *send* to a port but cannot *create* one, so reaching a DAW on
+   * the same machine needs a loopback driver running first. Saying so on the
+   * screen beats looking connected and sending into nothing.
+   */
+  if (s.optionsSub !== null) {
+    if (s.optionsSub === 'output') {
+      const ports = getMidi().ports()
+      const rows: Row[] = [{ label: 'None' }, ...ports.map((p) => ({ label: p.name }))]
+      if (ports.length === 0) rows.push({ label: 'No ports found' })
+      return { rows, cursor: s.optionsCursor }
+    }
+    return { rows: CHANNEL_VALUES.map((v) => ({ label: v })), cursor: s.optionsCursor }
+  }
+
   if (s.optionsPage !== null) {
     const row = optionById(s.optionsPage)
+    // The MIDI page carries a value per row: which port, and which channel each
+    // stream is on. Everything else is a plain list of values.
+    if (row.id === 'midiChannels') {
+      const port = getMidi().ports().find((p) => p.id === getMidi().portId)
+      const channel = (stream: MidiStream) => {
+        const c = getMidi().channelOf(stream)
+        return c === null ? 'Off' : String(c).padStart(2, '0')
+      }
+      return {
+        rows: [
+          { label: 'Output', value: port ? port.name : 'None' },
+          { label: 'Performance', value: channel('performance') },
+          { label: 'Bass', value: channel('bass') },
+          { label: 'Chord', value: channel('chord') },
+        ],
+        cursor: s.optionsCursor,
+      }
+    }
     return {
       rows: (row.values ?? []).map((v) => ({ label: v })),
       cursor: s.optionsCursor,

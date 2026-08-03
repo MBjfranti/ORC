@@ -29,6 +29,7 @@ import { buildChord } from '../core/chord.js'
 import { isCycle, performChord } from '../core/performance.js'
 import { resolveChord, resolveSingleNote } from '../core/resolve.js'
 import { routeKeypress } from './bass.js'
+import { getMidi } from './midi.js'
 import type { Resolved } from '../core/resolve.js'
 import type { MidiNote, PitchClass } from '../core/types.js'
 import { nearestPosition } from '../core/voicing.js'
@@ -290,6 +291,16 @@ export class Instrument {
       this.looper.captureOn(bass, 0.85, 'bass')
     }
 
+    /*
+     * The **chord** stream: the raw block, "regardless of performance mode"
+     * (research/09). Sent from here rather than from the synth precisely
+     * because the synth only ever sees the articulated version — an arpeggio
+     * reaches it as a sequence, and channel 3 is supposed to be the harmony as
+     * *data*, not as gesture.
+     */
+    getMidi().endStream('chord')
+    if (resolved) for (const n of resolved.notes) getMidi().noteOn('chord', n, 0.8)
+
     this.current = resolved
       ? { ...resolved, notes, bass }
       : {
@@ -430,6 +441,7 @@ export class Instrument {
   }
 
   silence(): void {
+    getMidi().endStream('chord')
     this.player.stopAll()
     if (this.current?.bass !== undefined) this.looper.captureOff(this.current.bass, 'bass')
     this.synth.bassOff()

@@ -93,13 +93,22 @@ export const OPTIONS: readonly OptionRow[] = [
     values: ['Auto', 'Headphones', 'Speakers', 'Both'],
     built: false,
   },
-  // §14.4. Web MIDI could carry this one day; there is no MIDI out yet.
+  /*
+   * §14.4 — "determine what MIDI channel Orchid sends MIDI note data on", with
+   * the three streams research/09 calls the most sophisticated thing about the
+   * instrument.
+   *
+   * `Output` is **ours** and is not in the manual: the hardware has a DIN
+   * socket and a USB port, and a browser has to be told which of the operating
+   * system's ports to talk to. It sits inside this page rather than as a
+   * fifteenth root row, so the documented list stays the documented list.
+   */
   {
     id: 'midiChannels',
     label: 'MIDI Channels',
     kind: 'enum',
-    values: ['Performance', 'Bass', 'Chord'],
-    built: false,
+    values: ['Output', 'Performance', 'Bass', 'Chord'],
+    built: true,
   },
   // §14.5 — how the pads and the keys interact. The one Options row that
   // changes how the instrument is *played*; see `engine/instrument.ts`.
@@ -231,6 +240,24 @@ export function viewPieces(mode: number): ViewPieces {
 
 /** `Exit` is row one, as PDF p20 shows it — a row, never a gesture. */
 export const OPTIONS_EXIT_ROW = 0
+
+/**
+ * The channel a stream can be on: Off, then 1–16.
+ *
+ * research/02 records "assignable or Off", and v3.90's changelog adds the Off
+ * setting explicitly. Off is first because it is the Chord stream's documented
+ * default.
+ */
+export const CHANNEL_VALUES: readonly string[] = [
+  'Off',
+  ...Array.from({ length: 16 }, (_, i) => String(i + 1).padStart(2, '0')),
+]
+
+/** Menu row index to a channel number, or `null` for Off. */
+export const channelFromRow = (row: number): number | null => (row <= 0 ? null : row)
+
+/** And back, for putting the cursor where the setting already is. */
+export const rowFromChannel = (channel: number | null): number => channel ?? 0
 
 export const optionAt = (row: number): OptionRow | undefined => OPTIONS[row]
 

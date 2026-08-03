@@ -30,6 +30,7 @@ import type { MidiNote } from '../core/types.js'
 import { bassAt } from './bass.js'
 import { beatTicks, ticksAt } from './clock.js'
 import { Drums } from './drums.js'
+import { getMidi } from './midi.js'
 import { BASS_SECTION_DB, bassTrim, dbToGain, DRUM_TRIM, soundTrim } from './levels.js'
 import { soundAt, voiceParams } from './sounds.js'
 import type { Sound } from './sounds.js'
@@ -374,8 +375,19 @@ class Synth {
 
   // --- public --------------------------------------------------------------
 
+  /**
+   * A note of the **performance** stream, in both senses: it reaches the synth
+   * and it reaches MIDI out.
+   *
+   * This is the right tap for research/09's channel 1 — "the final notes you
+   * actually hear, including arpeggios, strums, harp cascades" — because the
+   * articulation layer above has already spread them in time, and each arrives
+   * here with the audio time it is meant to sound at. Loop playback goes to the
+   * pool instead, so a loop does not re-transmit what was already sent live.
+   */
   noteOn(note: MidiNote, velocity = 0.8, at?: number): void {
     if (!this.started) return
+    getMidi().noteOn('performance', note, velocity, at ?? Tone.immediate())
     this.schedule(this.pendingOn, note, at ?? Tone.immediate(), ++this.seq, (t) =>
       this.attack(note, velocity, t),
     )
@@ -383,6 +395,7 @@ class Synth {
 
   noteOff(note: MidiNote, at?: number): void {
     if (!this.started) return
+    getMidi().noteOff('performance', note, at ?? Tone.immediate())
     const seq = ++this.seq
     this.schedule(this.pendingOff, note, at ?? Tone.immediate(), seq, (t) =>
       this.release(note, t, seq),
@@ -405,6 +418,7 @@ class Synth {
    */
   bassOn(note: MidiNote, velocity = 0.85, at?: number): void {
     if (!this.started) return
+    getMidi().noteOn('bass', note, velocity, at ?? Tone.immediate())
     this.schedule(this.pendingBass, note, at ?? Tone.immediate(), ++this.seq, (t) => {
       this.bass.triggerAttack(midiToFreq(note), t, velocity)
       this.bassNote = note
@@ -413,6 +427,8 @@ class Synth {
 
   bassOff(at?: number): void {
     if (!this.started) return
+    // The bass is monophonic, so whatever it is holding is what stops.
+    if (this.bassNote !== undefined) getMidi().noteOff('bass', this.bassNote, at ?? Tone.immediate())
     this.schedule(this.pendingBass, -1, at ?? Tone.immediate(), ++this.seq, (t) => {
       if (this.bassNote === undefined) return
       this.bass.triggerRelease(t)
@@ -437,6 +453,8 @@ class Synth {
 
     for (const voice of this.voices.values()) voice.releaseAll()
     this.live.clear()
+    // A hung note in someone's DAW outlives the tab, so panic reaches out too.
+    getMidi().panic()
 
     if (this.bassNote !== undefined) {
       this.bass.triggerRelease(Tone.immediate())

@@ -332,7 +332,8 @@ same mark the FX rack puts on an effect it does not have:
 | `Single Note Mode` | **built** — `Split Keyboard` or `Full Octave Keyboard`, see below |
 | `Secret Chords` | **built** — the six combinations of §14.8, gated by play style |
 | `Velocity Sense` | inert **and will stay so** — a computer keyboard sends no velocity. Nothing to sense until MIDI input exists |
-| `Audio Output`, `Auto Power Off`, `Upgrade firmware`, `MIDI Channels` | hardware — speakers vs a headphone jack, a battery timeout, firmware. A tab has none of them |
+| `MIDI Channels` | **built** — three-channel MIDI out over Web MIDI, see below |
+| `Audio Output`, `Auto Power Off`, `Upgrade firmware` | hardware — speakers vs a headphone jack, a battery timeout, firmware. A tab has none of them |
 
 Quantization previously existed twice: `loopGrid` in the store *and* the Options
 row. Removed — the menu row is the only copy.
@@ -493,6 +494,64 @@ Loop 02`), `Save As` into a chosen slot, `Load Loop` restoring a cleared
 transport to `playing` with its layer on preset 6, `Delete` emptying a slot, the
 cursor returning to the row that opened each picker, and the bank surviving a
 reload.
+
+### MIDI out (§14.4) — the three-channel split
+
+research/09 calls this "the most quietly sophisticated thing about the Orchid
+and the part most worth copying wholesale", and the reason is one line:
+**channel 3 is the harmony as data; channel 1 is the harmony as gesture.**
+
+| Stream | Tapped at | Contents |
+|---|---|---|
+| Performance | `Synth.noteOn/noteOff` | what you actually hear, arpeggios and strums included |
+| Bass | `Synth.bassOn/bassOff` | the bass engine's line |
+| Chord | `Instrument.sound` | the raw block chord, *regardless of performance mode* |
+
+Each tap is where its stream is semantically clearest. The chord one cannot live
+in the synth, because the synth only ever sees the *articulated* version — an
+arpeggio reaches it as a sequence, and channel 3 is meant to be the harmony as
+data. Loop playback goes to the synth pool, not `noteOn`, so a loop does not
+re-transmit what was already sent live.
+
+**Chord defaults to Off**, which is documented rather than cautious: v3.90's
+changelog reads "Chord MIDI channel now defaults to Off", and research/09 reads
+that as the duplicate-notes problem — the block chord and the performance stream
+carry the same harmony onto the same instrument unless you separated them on
+purpose.
+
+**Timing is scheduled, not fired.** A strum spreads over half a second, so
+messages carry a timestamp. `MIDIOutput.send` wants `performance.now()`'s clock
+and everything upstream is in AudioContext seconds, so `at()` converts —
+deliberately off `getContext().currentTime` rather than `Tone.now()`, which adds
+the lookahead and would push every message late. Without this a strum arrives at
+the DAW as a block chord.
+
+#### What a browser cannot do, and what that means for the user
+
+**Web MIDI can send to a port but cannot create one.** Reaching a DAW on the
+same machine needs a loopback port to already exist — IAC on macOS, **loopMIDI
+on Windows**, ALSA virtual ports on Linux. There is no way around it from inside
+a page. The port list showing `No ports found` is the honest signal and is what
+the screen says.
+
+`Output` is **ours** and not in the manual — the hardware has a DIN socket and a
+USB port and needs no picker. It lives inside the MIDI Channels page rather than
+as a fifteenth root row, so the documented list stays the documented list.
+
+#### Verified, and not
+
+Menu navigation, defaults and gating were checked in the browser: three levels
+deep, `Chord` reading `Off`, the channel list opening on the current value,
+choosing `05` writing through, the empty-port state rendering, and sending with
+no port selected being a silent no-op rather than a throw.
+
+**No message has been seen leaving the app.** Web MIDI needs a permission grant,
+the prompt is browser chrome this environment cannot reach, and the promise sits
+pending — so the port list, the timestamps and the note stream are all
+unverified end to end. The wire format is unit tested instead (status nibbles,
+seven-bit data, explicit note-off rather than zero-velocity note-on), because a
+wrong nibble is silent rather than loud and the only other way to find out is to
+open a DAW.
 
 ## Still not built
 

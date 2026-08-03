@@ -12,6 +12,9 @@ import { create } from 'zustand'
 import { buildChord } from '../core/chord.js'
 import { clockAt, clockRow, CLOCK_ROWS } from '../core/beats.js'
 import { OPTIONS } from '../core/options.js'
+import { CHANNEL_VALUES, channelFromRow, rowFromChannel } from '../core/options.js'
+import { getMidi } from '../engine/midi.js'
+import type { Stream as MidiStream } from '../engine/midi.js'
 import { SECRET_MODES, secretsEnabled } from '../core/secret.js'
 import type { SecretMode } from '../core/secret.js'
 import type { OptionId } from '../core/options.js'
@@ -268,6 +271,13 @@ export interface PanelState {
    * cannot share a 128px row, so choosing a value happens on a second screen.
    */
   optionsPage: OptionId | null
+  /**
+   * The third level, which only `MIDI Channels` has.
+   *
+   * Its page lists the output and the three streams; each of those then needs
+   * its own list of ports or channels. Everything else in Options is two deep.
+   */
+  optionsSub: string | null
   optionsCursor: number
   /** Which value each setting is on, by row. Only the built ones do anything. */
   optionValue: Readonly<Record<string, number>>
@@ -359,6 +369,7 @@ export interface PanelState {
   pressOption: () => void
   setOptionsPage: (page: OptionId | null) => void
   setBattery: (level: number | null) => void
+  setOptionsSub: (sub: string | null) => void
   setOptionValue: (id: OptionId, value: number) => void
   setScreenList: (index: number | null) => void
   showGlance: (value: string, label: string, level?: number, secondary?: boolean) => void
@@ -566,6 +577,7 @@ export const usePanel = create<PanelState>((set) => ({
 
   dialFocus: 0,
   optionsPage: null,
+  optionsSub: null,
   optionsCursor: 1, // `Battery`, the first row that is not `Exit`
   optionValue: {
     // Defaults are the manual's, where it gives one, and research/13 §A's
@@ -830,13 +842,32 @@ export const usePanel = create<PanelState>((set) => ({
 
   moveOptionsCursor: (delta) =>
     set((s) => {
-      const rows = s.optionsPage === null ? OPTIONS.length : optionRowCount(s.optionsPage)
+      const rows =
+        s.optionsSub !== null
+          ? s.optionsSub === 'output'
+            ? Math.max(2, getMidi().ports().length + 1)
+            : CHANNEL_VALUES.length
+          : s.optionsPage === null
+            ? OPTIONS.length
+            : optionRowCount(s.optionsPage)
       return { optionsCursor: Math.max(0, Math.min(rows - 1, s.optionsCursor + delta)) }
     }),
+
+  setOptionsSub: (optionsSub) =>
+    set((s) => ({
+      optionsSub,
+      optionsCursor:
+        optionsSub === null
+          ? ['output', 'performance', 'bass', 'chord'].indexOf(s.optionsSub ?? 'output')
+          : optionsSub === 'output'
+            ? Math.max(0, getMidi().ports().findIndex((p) => p.id === getMidi().portId) + 1)
+            : rowFromChannel(getMidi().channelOf(optionsSub as MidiStream)),
+    })),
 
   setOptionsPage: (optionsPage) =>
     set((s) => ({
       optionsPage,
+      optionsSub: null,
       // Entering a setting lands on the value it is already on, which is the
       // only useful place to start; leaving lands back on the row you came from.
       optionsCursor:
@@ -858,6 +889,35 @@ export const usePanel = create<PanelState>((set) => ({
    */
   pressOption: () => {
     const s = usePanel.getState()
+
+    /*
+     * Third level: an output port, or a stream's channel. These are the only
+     * settings in the menu that live outside `optionValue`, because they belong
+     * to a device rather than to the instrument — the port list changes while
+     * the page is open, and a channel is meaningless without one.
+     */
+    if (s.optionsSub !== null) {
+      if (s.optionsSub === 'output') {
+        const ports = getMidi().ports()
+        // Row 0 is `None`; the rest are ports in the order the system lists them.
+        getMidi().select(s.optionsCursor === 0 ? null : (ports[s.optionsCursor - 1]?.id ?? null))
+      } else {
+        getMidi().setChannel(s.optionsSub as MidiStream, channelFromRow(s.optionsCursor))
+      }
+      usePanel.getState().setOptionsSub(null)
+      return
+    }
+
+    if (s.optionsPage === 'midiChannels') {
+      // Asking for access here rather than at startup: a permission prompt
+      // before anyone has shown an interest in MIDI is one people block.
+      const sub = ['output', 'performance', 'bass', 'chord'][s.optionsCursor] ?? 'output'
+      void getMidi()
+        .enable()
+        .then(() => usePanel.getState().setOptionsSub(sub))
+      return
+    }
+
     if (s.optionsPage !== null) {
       set({ optionValue: { ...s.optionValue, [s.optionsPage]: s.optionsCursor } })
       usePanel.getState().setOptionsPage(null)
@@ -945,7 +1005,7 @@ export const usePanel = create<PanelState>((set) => ({
   setScreenList: (screenList) =>
     set(
       screenList === null
-        ? { screenList, fxAdjusting: false, performAdjusting: false }
+        ? { screenList, fxAdjusting: false, performAdjusting: false, optionsPage: null, optionsSub: null }
         : { screenList },
     ),
   showGlance: (value, label, level, secondary) =>
