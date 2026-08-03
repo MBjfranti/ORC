@@ -253,6 +253,51 @@ audio callback instead.
 `pause()` calls `stopPlayback()` rather than `allNotesOff()`, so pausing a loop
 does not cut a chord you are holding.
 
+## Levels — measured, in `engine/levels.ts`
+
+The library was **16.3dB apart** end to end (gated), the bass sat **12.9dB**
+hotter than the treble, and a beat ran **19.6dB** hotter than a chord. That is
+the jumping.
+
+`sounds.ts`'s derived `volume` was never a loudness match and
+`derive-sounds.cjs` says so: "the source's `v` is a raw amplitude and tracks
+loudness only loosely once FM depth is involved". It could not be — what a
+preset sounds like is dominated by envelope sustain, filter cutoff and FM index,
+none of which `v` knows about. So the derived number stays (provenance, and
+`--check` still verifies it) and the correction lives beside it as a measured
+layer.
+
+`scripts/measure-levels.mjs` renders every preset **offline**, through the same
+`voiceParams` the instrument plays, and solves for a trim. Two rules earned the
+hard way:
+
+- **Gate the loudness.** A plain windowed RMS is dragged down by the silence
+  after a short note, so `26 Tiptoe Pizz` asked for **+10.17dB** — and boosted
+  by that it did not become level, it became a very loud pluck followed by
+  nothing, still measuring 9.4dB down in real playing. Gated the same preset
+  asks for **+4.57dB**. If the trims are ever regenerated, check the gate is
+  still there.
+- **Per-preset trim and section offset are different jobs.** Solving the bass
+  against the *treble* target pinned seven of twelve presets at the ±12 rail.
+  Flattening each family against its own median keeps trims small — and a large
+  one then means a broken preset rather than an artefact of comparing one bass
+  note to a four-note chord. Where a family *sits* is one number on its bus:
+  `BASS_SECTION_DB`, `DRUM_TRIM`.
+
+Verified in real playing, gated: chord spread **5.3dB** across nine presets,
+beat **-0.39dB** against the chords, bass **-1.67dB**. The residual is not zero
+and is not meant to be — some is the difference between a 200ms analysis block
+and a 43ms one, some is each preset carrying its own reverb and chorus (dry
+measured 7.35dB against 7.72dB wet, so FX is not the driver).
+
+**One genuine outlier: `50 Slow Weather` reads ~3.8dB quiet** even held for two
+and a half seconds, where the offline harness says it is on target. Not chased
+down. Everything else lands within about 2.5dB.
+
+**Re-run the harness after changing any preset's envelope, cutoff or FM index.**
+Those are the fields that move loudness, and a stale trim is worse than none
+because it looks deliberate.
+
 ## Still not built
 
 | Thing | Notes |

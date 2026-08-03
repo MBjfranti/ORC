@@ -258,6 +258,47 @@ export const SOUNDS: readonly Sound[] = [
  * nominally end. Capped so a very slow tail cannot schedule automation absurdly
  * far into the future.
  */
+/**
+ * A preset as Tone's synth options, with a level trim applied.
+ *
+ * Exported rather than kept inside the synth because the loudness harness has
+ * to render the *same* voice the instrument plays — a measurement taken against
+ * a reimplementation of the envelope mapping would drift from the thing it is
+ * supposed to be calibrating, silently and in the direction that is hardest to
+ * notice. One definition, two callers.
+ *
+ * Plain objects, no Tone types: this module stays free of the audio library so
+ * it can be read and tested without one.
+ */
+export function voiceParams(sound: Sound, trim = 0): Record<string, unknown> {
+  const envelope = {
+    attack: sound.attack,
+    decay: decayFor(sound.decay),
+    sustain: sound.sustain,
+    release: decayFor(sound.release),
+  }
+  const volume = sound.volume + trim
+
+  if (sound.engine === 'sub') {
+    return { oscillator: { type: sound.wave ?? 'sawtooth' }, envelope, volume }
+  }
+  return {
+    harmonicity: sound.harmonicity ?? 3,
+    modulationIndex: sound.index ?? 10,
+    envelope,
+    // The modulator's envelope is what makes a struck sound struck: it
+    // collapses the brightness while the body rings on. Leaving it fixed gives
+    // every FM preset one colour and they all blur together.
+    modulationEnvelope: {
+      attack: sound.modAttack ?? 0.004,
+      decay: decayFor(sound.modDecay ?? 0.1),
+      sustain: sound.modSustain ?? 0.1,
+      release: decayFor(sound.modRelease ?? 0.1),
+    },
+    volume,
+  }
+}
+
 export const decayFor = (tau: number) => Math.min(Math.pow(200, tau) - 1, 120)
 
 /** `01`–`50`, the way the panel numbers them. */

@@ -30,7 +30,8 @@ import type { MidiNote } from '../core/types.js'
 import { bassAt } from './bass.js'
 import { beatTicks, ticksAt } from './clock.js'
 import { Drums } from './drums.js'
-import { decayFor, soundAt } from './sounds.js'
+import { BASS_SECTION_DB, bassTrim, dbToGain, DRUM_TRIM, soundTrim } from './levels.js'
+import { soundAt, voiceParams } from './sounds.js'
 import type { Sound } from './sounds.js'
 
 const midiToFreq = (note: MidiNote) => 440 * Math.pow(2, (note - 69) / 12)
@@ -274,7 +275,10 @@ class Synth {
 
     // The bass takes its own path to the output, bypassing the chord FX chain
     // so reverb and chorus do not turn the low end to mush.
-    this.bassGain = new Tone.Gain(0.9).connect(this.master)
+    // The section offset lives on the bus, so the player's Bass Volume works
+    // either side of a sensible balance rather than spending its travel
+    // correcting one. See `BASS_SECTION_DB`.
+    this.bassGain = new Tone.Gain(0.9 * dbToGain(BASS_SECTION_DB)).connect(this.master)
     this.bass = new Tone.MonoSynth({
       oscillator: { type: 'sawtooth' },
       filter: { Q: 2, type: 'lowpass', rolloff: -24 },
@@ -459,14 +463,14 @@ class Synth {
       this.active = sound.engine
     }
 
-    this.apply(sound)
+    this.apply(sound, index)
     this.baseCutoff = sound.cutoff
     this.setCutoff(this.cutoff)
   }
 
-  private apply(sound: Sound): void {
+  private apply(sound: Sound, index: number): void {
     const synth = this.voices.get(sound.engine)
-    if (synth) this.applyTo(synth, sound)
+    if (synth) this.applyTo(synth, sound, soundTrim(index))
   }
 
   /**
@@ -477,36 +481,11 @@ class Synth {
    * playback than it did while you recorded it would be worse than no per-layer
    * sound at all.
    */
-  private applyTo(synth: Tone.PolySynth, sound: Sound): void {
-    const envelope = {
-      attack: sound.attack,
-      decay: decayFor(sound.decay),
-      sustain: sound.sustain,
-      release: decayFor(sound.release),
-    }
-
-    if (sound.engine === 'sub') {
-      synth.set({ oscillator: { type: sound.wave ?? 'sawtooth' }, envelope, volume: sound.volume })
-    } else {
-      // The map is typed to the subtractive synth's options, so the FM fields
-      // need a cast — both engines are PolySynths, but of different voices.
-      synth.set({
-        harmonicity: sound.harmonicity ?? 3,
-        modulationIndex: sound.index ?? 10,
-        envelope,
-        // The modulator's envelope is what makes a struck sound struck: it
-        // collapses the brightness while the body rings on. Leaving it fixed
-        // gives every FM preset one colour and they all blur together.
-        modulationEnvelope: {
-          attack: sound.modAttack ?? 0.004,
-          decay: decayFor(sound.modDecay ?? 0.1),
-          sustain: sound.modSustain ?? 0.1,
-          release: decayFor(sound.modRelease ?? 0.1),
-        },
-        volume: sound.volume,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any)
-    }
+  private applyTo(synth: Tone.PolySynth, sound: Sound, trim: number): void {
+    // The options map is typed to the subtractive voice, so the FM fields need
+    // a cast — both engines are PolySynths, but of different voices.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    synth.set(voiceParams(sound, trim) as any)
   }
 
   /**
@@ -540,7 +519,7 @@ class Synth {
         baseFrequency: sound.base,
         octaves: sound.octaves,
       },
-      volume: sound.volume,
+      volume: sound.volume + bassTrim(index),
     })
   }
 
@@ -622,7 +601,7 @@ class Synth {
   }
 
   setBeatLevel(level: number): void {
-    if (this.started) this.drums.setLevel(level)
+    if (this.started) this.drums.setLevel(level * dbToGain(DRUM_TRIM))
   }
 
   setDrumReverb(wet: number): void {
@@ -669,7 +648,7 @@ class Synth {
   }
 
   setBassLevel(level: number): void {
-    if (this.started) this.bassGain.gain.rampTo(clamp01(level), 0.05)
+    if (this.started) this.bassGain.gain.rampTo(clamp01(level) * dbToGain(BASS_SECTION_DB), 0.05)
   }
 
   // --- loop playback, per layer ----------------------------------------------
@@ -706,7 +685,7 @@ class Synth {
         : new Tone.PolySynth(Tone.FMSynth)
     synth.connect(this.filter)
     this.pool.set(index, synth)
-    this.applyTo(synth, sound)
+    this.applyTo(synth, sound, soundTrim(index))
     return synth
   }
 
