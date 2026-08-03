@@ -926,7 +926,8 @@ export const usePanel = create<PanelState>((set) => ({
     const row = OPTIONS[s.optionsCursor]
     if (!row) return
     if (row.id === 'exit') {
-      set({ screenList: null, optionsPage: null })
+      // The whole stack, not just this level — `Exit` means the menu, not a page.
+      set({ screenList: null, optionsPage: null, optionsSub: null })
       return
     }
     if (row.kind === 'enum' && row.built) {

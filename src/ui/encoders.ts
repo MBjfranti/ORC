@@ -803,7 +803,24 @@ export const ENCODERS: readonly Encoder[] = [
     cap: 'black',
     reach: (s) => s.setScreenList(OPTIONS_LIST),
     turn: (s, d) => s.moveOptionsCursor(d),
-    press: (s) => s.pressOption(),
+    /*
+     * With the menu shut, the press **re-opens** it rather than pressing a row.
+     *
+     * Every other encoder's press is that section's own switch, so it means the
+     * same thing whether or not the screen is showing. Options has no switch —
+     * its press is menu navigation — so once you had left, the next tap was
+     * acting on a cursor nobody could see: it would open a setting's value page
+     * or throw a glance, invisibly, and the menu appeared not to come back at
+     * all. Reported after changing `View`, which is exactly the case where the
+     * screen behind it had also changed.
+     */
+    press: (s) => {
+      if (s.screenList !== OPTIONS_LIST) {
+        s.setScreenList(OPTIONS_LIST)
+        return
+      }
+      s.pressOption()
+    },
     sensitivity: 8,
   },
 
